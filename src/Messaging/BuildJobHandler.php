@@ -4,23 +4,19 @@ declare(strict_types=1);
 
 namespace App\Messaging;
 
+use App\Content\ContentDownloader;
 use App\Storage\JobWorkspace;
 
-/**
- * Provisions one q.builds message's folders, and nothing else.
- *
- * Split out of AmqpBuildJobListener so the per-message logic is testable
- * without a broker -- the listener cannot run without a live connection.
- */
+
 final class BuildJobHandler
 {
-    public function __construct(private readonly JobWorkspace $workspace)
+    public function __construct(private readonly ContentDownloader $downloader, private readonly JobWorkspace $workspace)
     {
     }
 
     /**
-     * @throws \RuntimeException         if the message is unusable
      * @throws \InvalidArgumentException if the static_site_id is unsafe
+     * @throws \RuntimeException if the message is unusable or the download fails
      */
     public function handle(string $messageBody): void
     {
@@ -33,6 +29,17 @@ final class BuildJobHandler
         $jobDir = $this->workspace->createJobDirectories($staticSiteId);
 
         error_log(sprintf('[INFO] prepared job workdir %s', $jobDir));
+
+        $url = $this->requireString($job, 'content_download_url');
+        $inputDir = rtrim($jobDir, '/') . '/input';
+        $file = $this->downloader->download($url, $inputDir );
+
+        error_log(sprintf(
+            '[INFO] downloaded %s to %s (%d bytes)',
+            $url,
+            $file,
+            (int) @filesize($file),
+        ));
     }
 
     /**

@@ -41,16 +41,19 @@ final class AmqpBuildJobListener
             function (AMQPMessage $msg): void {
                 error_log(sprintf('[INFO] received build job: %s', $msg->getBody()));
 
-                // Acked either way: no dead-letter queue and no retry counter
-                // yet, so requeuing a job that can never succeed would
-                // redeliver it forever. The log line carries the reason.
                 try {
+                    // Handle the build job
                     $this->handler->handle($msg->getBody());
                 } catch (\Throwable $e) {
+                    // Logged and acked rather than requeued: there is no
+                    // dead-letter queue and no retry counter, so a job that
+                    // cannot succeed (e.g. a 404 due to invalid content URL) would redeliver forever.
+                    // The cost is that a job lost to a transient failure is
+                    // lost silently -- nothing consumes callback_status_url yet.
                     error_log(sprintf('[ERROR] build job failed: %s', $e->getMessage()));
-                } finally {
-                    $msg->ack();
                 }
+
+                $msg->ack();
             },
         );
 

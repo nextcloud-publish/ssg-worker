@@ -26,3 +26,10 @@ services:
             # fail loudly rather than send builds somewhere nothing looks.
             # Set in integration-test/docker-compose.yml.
             $baseDir: '%env(JOB_STORAGE_DIR)%'
+    App\Content\ContentDownloader:
+        arguments:
+            # In megabytes. No fallback: the cap protects a volume shared with
+            # publish and every other job, so a deployment that forgets to set
+            # it should fail loudly rather than have a limit guessed for it.
+            # Set in integration-test/docker-compose.yml.
+            $maxMegabytes: '%env(int:MAX_DOWNLOAD_MB)%'
