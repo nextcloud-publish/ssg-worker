@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Messaging;
 
+use App\Content\ArchiveExtractor;
 use App\Content\ContentDownloader;
 use App\Messaging\BuildJobHandler;
 use App\Storage\JobWorkspace;
@@ -13,7 +14,7 @@ use Symfony\Component\HttpClient\MockHttpClient;
 use Symfony\Component\HttpClient\Response\MockResponse;
 
 /**
- * Real collaborators rather than test doubles: both are final, and this way
+ * Real collaborators rather than test doubles: they are final, and this way
  * the handler's rejections are proven by the request never being issued
  * (getRequestsCount() === 0) instead of by a mock expectation.
  */
@@ -22,6 +23,7 @@ final class BuildJobHandlerTest extends TestCase
     private const SITE_ID = '11f5b798-6f34-4951-ad8b-bfd623ded5c2';
 
     private string $baseDir;
+    private string $archiveBytes;
     private MockHttpClient $client;
     private string $logFile;
     private string|false $previousErrorLog;
@@ -32,8 +34,11 @@ final class BuildJobHandlerTest extends TestCase
         // is what proves it did.
         $this->baseDir = sys_get_temp_dir() . '/worker-job-test-' . bin2hex(random_bytes(6));
 
-        // A factory, not one response: a rebuild downloads a second time.
-        $this->client = new MockHttpClient(static fn (): MockResponse => new MockResponse('tar-gz-bytes'));
+        // A real archive, not a placeholder string: the handler extracts what
+        // it downloads, so the response body has to be a valid tar.gz. Served
+        // from a factory rather than one response: a rebuild downloads twice.
+        $this->archiveBytes = $this->sampleArchiveBytes();
+        $this->client = new MockHttpClient(fn (): MockResponse => new MockResponse($this->archiveBytes));
 
         // error_log() writes to stderr/syslog by default, neither of which
         // a test can assert against. Restored in tearDown().
@@ -51,10 +56,32 @@ final class BuildJobHandlerTest extends TestCase
         }
     }
 
+    /**
+     * A minimal stand-in for legit_sample.tar.gz: pages at the archive root,
+     * matching the shape of the real fixture.
+     */
+    private function sampleArchiveBytes(): string
+    {
+        $staging = sys_get_temp_dir() . '/worker-job-fixture-' . bin2hex(random_bytes(6));
+        mkdir($staging . '/Cats', 0o755, true);
+        file_put_contents($staging . '/Readme.md', '# sample');
+        file_put_contents($staging . '/Cats/Readme.md', '# cats');
+
+        $archive = $staging . '.tar.gz';
+        exec(sprintf('tar -czf %s -C %s .', escapeshellarg($archive), escapeshellarg($staging)), $out, $code);
+        self::assertSame(0, $code, 'fixture archive could not be built');
+
+        $bytes = (string) file_get_contents($archive);
+        exec('rm -rf ' . escapeshellarg($staging) . ' ' . escapeshellarg($archive));
+
+        return $bytes;
+    }
+
     private function handler(): BuildJobHandler
     {
         return new BuildJobHandler(
             new ContentDownloader($this->client, maxMegabytes: 1),
+            new ArchiveExtractor(),
             new JobWorkspace($this->baseDir),
         );
     }
@@ -88,16 +115,32 @@ final class BuildJobHandlerTest extends TestCase
         self::assertDirectoryExists($this->jobDir() . '/output');
     }
 
-    public function testDownloadsIntoTheJobsInputFolder(): void
+    public function testDownloadsAndExtractsIntoTheJobsInputFolder(): void
     {
         $this->handler()->handle($this->message());
 
         self::assertSame(1, $this->client->getRequestsCount());
+
+        $unarchived = $this->jobDir() . '/input/' . BuildJobHandler::UNARCHIVED_DIR;
+
+        // The archive stays in input/, its contents go one level down.
         self::assertFileExists($this->jobDir() . '/input/' . ContentDownloader::FILENAME);
+        self::assertSame('# sample', file_get_contents($unarchived . '/Readme.md'));
+        self::assertSame('# cats', file_get_contents($unarchived . '/Cats/Readme.md'));
+
+        // The point of the dedicated folder: what the site generator is handed
+        // contains pages only, with no archive sitting in the middle of them.
+        self::assertFileDoesNotExist($unarchived . '/' . ContentDownloader::FILENAME);
         self::assertSame(
-            'tar-gz-bytes',
-            file_get_contents($this->jobDir() . '/input/' . ContentDownloader::FILENAME),
+            ['Cats', 'Readme.md'],
+            array_values(array_diff(scandir($unarchived), ['.', '..'])),
         );
+
+        // And input/ itself holds exactly the archive and that one folder.
+        $inInput = array_values(array_diff(scandir($this->jobDir() . '/input'), ['.', '..']));
+        sort($inInput);
+        self::assertSame([ContentDownloader::FILENAME, BuildJobHandler::UNARCHIVED_DIR], $inInput);
+
         // output/ is the next step's business; nothing should land there yet.
         self::assertSame([], array_values(array_diff(scandir($this->jobDir() . '/output'), ['.', '..'])));
     }
@@ -121,6 +164,24 @@ final class BuildJobHandlerTest extends TestCase
 
         self::assertFileExists($this->jobDir() . '/input/keep.md');
         self::assertSame(2, $this->client->getRequestsCount());
+        self::assertSame(
+            '# sample',
+            file_get_contents($this->jobDir() . '/input/' . BuildJobHandler::UNARCHIVED_DIR . '/Readme.md'),
+        );
+    }
+
+    public function testFailsWhenTheDownloadIsNotAValidArchive(): void
+    {
+        $handler = new BuildJobHandler(
+            new ContentDownloader(new MockHttpClient(new MockResponse('not an archive')), maxMegabytes: 1),
+            new ArchiveExtractor(),
+            new JobWorkspace($this->baseDir),
+        );
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Extracting');
+
+        $handler->handle($this->message());
     }
 
     public function testRejectsMalformedJson(): void

@@ -4,14 +4,25 @@ declare(strict_types=1);
 
 namespace App\Messaging;
 
+use App\Content\ArchiveExtractor;
 use App\Content\ContentDownloader;
 use App\Storage\JobWorkspace;
 
 
 final class BuildJobHandler
 {
-    public function __construct(private readonly ContentDownloader $downloader, private readonly JobWorkspace $workspace)
-    {
+    /**
+     * Where the archive is unpacked, relative to the job's input/ folder.
+     * Kept out of the archive's own directory so that whatever renders the
+     * site is handed a path containing nothing but the page tree.
+     */
+    public const UNARCHIVED_DIR = 'content_unarchived';
+
+    public function __construct(
+        private readonly ContentDownloader $downloader,
+        private readonly ArchiveExtractor $extractor,
+        private readonly JobWorkspace $workspace
+    ) {
     }
 
     /**
@@ -40,6 +51,13 @@ final class BuildJobHandler
             $file,
             (int) @filesize($file),
         ));
+
+        // Into its own folder rather than next to the archive: this is the
+        // path the site generator gets handed, and it must contain only pages.
+        $unarchivedDir = $inputDir . '/' . self::UNARCHIVED_DIR;
+        $this->extractor->extract($file, $unarchivedDir);
+
+        error_log(sprintf('[INFO] extracted %s into %s', $file, $unarchivedDir));
     }
 
     /**
