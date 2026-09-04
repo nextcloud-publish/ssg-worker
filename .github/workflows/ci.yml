@@ -12,6 +12,9 @@ permissions:
   contents: read
 
 env:
+  # The one supported PHP: what composer.json requires and what the
+  # Dockerfile ships. Keep those three in step.
+  PHP_VERSION: '8.5'
   # MAX_DOWNLOAD_MB deliberately has no fallback (see config/services.yaml),
   # so anything that compiles the container needs it resolvable. The value
   # itself is irrelevant to linting and testing.
@@ -30,7 +33,7 @@ jobs:
       - name: Set up PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.4'
+          php-version: ${{ env.PHP_VERSION }}
           extensions: ${{ env.PHP_EXTENSIONS }}
           coverage: none
 
@@ -56,23 +59,15 @@ jobs:
         run: php bin/console lint:container
 
   test:
-    name: Tests (PHP ${{ matrix.php }})
+    name: Tests
     runs-on: ubuntu-latest
-    strategy:
-      # Report both versions rather than hiding the second behind the first.
-      fail-fast: false
-      matrix:
-        # 8.4 is the minimum composer.json claims to support; 8.5 is what the
-        # runtime image actually ships. Testing only one would leave the other
-        # an unverified assertion.
-        php: ['8.4', '8.5']
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: ${{ matrix.php }}
+          php-version: ${{ env.PHP_VERSION }}
           extensions: ${{ env.PHP_EXTENSIONS }}
           coverage: none
 
@@ -116,7 +111,10 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: docker/Dockerfile
+          # Root of the repo, not docker/: this repo keeps a single Dockerfile
+          # there. Naming a directory that does not exist fails in buildx
+          # ("lstat docker: no such file or directory"), not at checkout.
+          file: Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

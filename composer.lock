@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "8455c643f629393b125b10f14fc571bb",
+    "content-hash": "cab60a0365badf15c8e0c9ddcc211159",
     "packages": [
         {
             "name": "dflydev/dot-access-data",
@@ -537,7 +537,7 @@
                 "source": "https://github.com/nextcloud-publish/ssg-library/tree/main",
                 "issues": "https://github.com/nextcloud-publish/ssg-library/issues"
             },
-            "time": "2026-09-03T10:08:26+00:00"
+            "time": "2026-09-09T09:34:16+00:00"
         },
         {
             "name": "psr/cache",
@@ -6027,7 +6027,7 @@
     "prefer-stable": true,
     "prefer-lowest": false,
     "platform": {
-        "php": ">=8.4",
+        "php": ">=8.5",
         "ext-ctype": "*",
         "ext-iconv": "*"
     },
