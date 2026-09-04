@@ -8,6 +8,7 @@ use App\Content\ArchiveExtractor;
 use App\Content\ContentDownloader;
 use App\Messaging\AmqpBuildJobListener;
 use App\Messaging\BuildJobHandler;
+use App\Rendering\SiteRenderer;
 use App\Storage\JobWorkspace;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpClient\MockHttpClient;
@@ -32,6 +33,7 @@ final class AmqpBuildJobListenerTest extends TestCase
         return new AmqpBuildJobListener(new BuildJobHandler(
             new ContentDownloader(new MockHttpClient(), maxMegabytes: 1),
             new ArchiveExtractor(),
+            new SiteRenderer(),
             new JobWorkspace('/tmp'),
         ));
     }

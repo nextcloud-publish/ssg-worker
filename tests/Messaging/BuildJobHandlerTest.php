@@ -7,6 +7,7 @@ namespace App\Tests\Messaging;
 use App\Content\ArchiveExtractor;
 use App\Content\ContentDownloader;
 use App\Messaging\BuildJobHandler;
+use App\Rendering\SiteRenderer;
 use App\Storage\JobWorkspace;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -21,6 +22,12 @@ use Symfony\Component\HttpClient\Response\MockResponse;
 final class BuildJobHandlerTest extends TestCase
 {
     private const SITE_ID = '11f5b798-6f34-4951-ad8b-bfd623ded5c2';
+
+    /**
+     * What a real Collectives publish endpoint looks like. Never actually
+     * fetched -- MockHttpClient answers before anything leaves the process.
+     */
+    private const CONTENT_URL = 'https://some-nextcloud.org/apps/collectives/some-collective-1234/publish/markdown_bundle';
 
     private string $baseDir;
     private string $archiveBytes;
@@ -82,6 +89,7 @@ final class BuildJobHandlerTest extends TestCase
         return new BuildJobHandler(
             new ContentDownloader($this->client, maxMegabytes: 1),
             new ArchiveExtractor(),
+            new SiteRenderer(),
             new JobWorkspace($this->baseDir),
         );
     }
@@ -99,7 +107,7 @@ final class BuildJobHandlerTest extends TestCase
         return (string) json_encode($overrides + [
             'static_site_id' => self::SITE_ID,
             'slug' => 'integration_test_collective',
-            'content_download_url' => 'http://content-host/legit_sample.tar.gz',
+            'content_download_url' => self::CONTENT_URL,
             'callback_status_url' => '',
             'created_at' => '2026-09-03T13:00:09+00:00',
         ]);
@@ -115,7 +123,7 @@ final class BuildJobHandlerTest extends TestCase
         self::assertDirectoryExists($this->jobDir() . '/output');
     }
 
-    public function testDownloadsAndExtractsIntoTheJobsInputFolder(): void
+    public function testDownloadsExtractsAndRendersIntoTheJobsFolders(): void
     {
         $this->handler()->handle($this->message());
 
@@ -141,8 +149,16 @@ final class BuildJobHandlerTest extends TestCase
         sort($inInput);
         self::assertSame([ContentDownloader::FILENAME, BuildJobHandler::UNARCHIVED_DIR], $inInput);
 
-        // output/ is the next step's business; nothing should land there yet.
-        self::assertSame([], array_values(array_diff(scandir($this->jobDir() . '/output'), ['.', '..'])));
+        // And the site was rendered from that folder into output/.
+        $index = $this->jobDir() . '/output/index.html';
+        self::assertFileExists($index);
+        self::assertFileExists($this->jobDir() . '/output/Cats/index.html');
+
+        // The slug from the message is what titles the site.
+        self::assertStringContainsString(
+            'integration_test_collective',
+            (string) file_get_contents($index),
+        );
     }
 
     public function testLogsThePreparedWorkdir(): void
@@ -164,10 +180,20 @@ final class BuildJobHandlerTest extends TestCase
 
         self::assertFileExists($this->jobDir() . '/input/keep.md');
         self::assertSame(2, $this->client->getRequestsCount());
-        self::assertSame(
-            '# sample',
-            file_get_contents($this->jobDir() . '/input/' . BuildJobHandler::UNARCHIVED_DIR . '/Readme.md'),
-        );
+        self::assertFileExists($this->jobDir() . '/output/index.html');
+    }
+
+    public function testRejectsAMessageWithoutASlug(): void
+    {
+        // The slug titles the rendered site, so a job without one cannot
+        // produce correct output -- reject before spending the download.
+        $payload = json_decode($this->message(), true);
+        unset($payload['slug']);
+
+        $this->assertRejects((string) json_encode($payload), 'slug');
+
+        // Checked before the workspace is provisioned, so nothing was created.
+        self::assertDirectoryDoesNotExist($this->baseDir);
     }
 
     public function testFailsWhenTheDownloadIsNotAValidArchive(): void
@@ -175,6 +201,7 @@ final class BuildJobHandlerTest extends TestCase
         $handler = new BuildJobHandler(
             new ContentDownloader(new MockHttpClient(new MockResponse('not an archive')), maxMegabytes: 1),
             new ArchiveExtractor(),
+            new SiteRenderer(),
             new JobWorkspace($this->baseDir),
         );
 
@@ -203,7 +230,7 @@ final class BuildJobHandlerTest extends TestCase
     public function testRejectsAMissingContentDownloadUrl(): void
     {
         $this->assertRejects(
-            (string) json_encode(['static_site_id' => self::SITE_ID]),
+            (string) json_encode(['static_site_id' => self::SITE_ID, 'slug' => 'some_collective']),
             'content_download_url',
         );
     }
@@ -261,8 +288,9 @@ final class BuildJobHandlerTest extends TestCase
 
     /**
      * Every rejection must happen before anything is fetched or written. The
-     * workspace itself may already exist -- static_site_id is validated first,
-     * so a bad content_download_url is caught with the folders in place.
+     * workspace itself may already exist -- static_site_id and slug are
+     * validated first, so a bad content_download_url is caught with the
+     * folders in place.
      */
     private function assertRejects(string $message, string $expectedInMessage): void
     {

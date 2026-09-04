@@ -6,8 +6,8 @@ namespace App\Messaging;
 
 use App\Content\ArchiveExtractor;
 use App\Content\ContentDownloader;
+use App\Rendering\SiteRenderer;
 use App\Storage\JobWorkspace;
-
 
 final class BuildJobHandler
 {
@@ -21,13 +21,14 @@ final class BuildJobHandler
     public function __construct(
         private readonly ContentDownloader $downloader,
         private readonly ArchiveExtractor $extractor,
-        private readonly JobWorkspace $workspace
+        private readonly SiteRenderer $renderer,
+        private readonly JobWorkspace $workspace,
     ) {
     }
 
     /**
      * @throws \InvalidArgumentException if the static_site_id is unsafe
-     * @throws \RuntimeException if the message is unusable or the download fails
+     * @throws \RuntimeException         if the message is unusable or any step fails
      */
     public function handle(string $messageBody): void
     {
@@ -37,13 +38,16 @@ final class BuildJobHandler
         // whether it is safe to use as one.
         $staticSiteId = $this->requireString($job, 'static_site_id');
 
+        // Rendered as the header link on every generated page.
+        $siteTitle = $this->requireString($job, 'slug');
+
         $jobDir = $this->workspace->createJobDirectories($staticSiteId);
 
         error_log(sprintf('[INFO] prepared job workdir %s', $jobDir));
 
         $url = $this->requireString($job, 'content_download_url');
-        $inputDir = rtrim($jobDir, '/') . '/input';
-        $file = $this->downloader->download($url, $inputDir );
+        $inputDir = $jobDir . '/' . JobWorkspace::INPUT_DIR;
+        $file = $this->downloader->download($url, $inputDir);
 
         error_log(sprintf(
             '[INFO] downloaded %s to %s (%d bytes)',
@@ -58,6 +62,11 @@ final class BuildJobHandler
         $this->extractor->extract($file, $unarchivedDir);
 
         error_log(sprintf('[INFO] extracted %s into %s', $file, $unarchivedDir));
+
+        $outputDir = $jobDir . '/' . JobWorkspace::OUTPUT_DIR;
+        $pages = $this->renderer->render($unarchivedDir, $outputDir, $siteTitle);
+
+        error_log(sprintf('[INFO] rendered %d page(s) into %s', $pages, $outputDir));
     }
 
     /**
