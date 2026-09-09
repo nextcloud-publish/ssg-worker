@@ -8,7 +8,7 @@ use PhpAmqpLib\Connection\AMQPStreamConnection;
 use PhpAmqpLib\Message\AMQPMessage;
 
 /**
- * Listens for build jobs on RabbitMQ and logs each one.
+ * Listens for build jobs on RabbitMQ and hands each one to BuildJobHandler.
  *
  * The broker imports its topology from publish/docker/rabbitmq-config/definitions.json
  * at boot, so this listener never declares the queue or an exchange -- it just
@@ -17,6 +17,10 @@ use PhpAmqpLib\Message\AMQPMessage;
 final class AmqpBuildJobListener
 {
     private const QUEUE_BUILDS = 'q.builds';
+
+    public function __construct(private readonly BuildJobHandler $handler)
+    {
+    }
 
     public function listen(): void
     {
@@ -35,10 +39,18 @@ final class AmqpBuildJobListener
             false,
             false,
             function (AMQPMessage $msg): void {
-                // Skeleton stage: no build logic yet, just prove messages are
-                // being received -- observable via `docker logs`.
                 error_log(sprintf('[INFO] received build job: %s', $msg->getBody()));
-                $msg->ack();
+
+                // Acked either way: no dead-letter queue and no retry counter
+                // yet, so requeuing a job that can never succeed would
+                // redeliver it forever. The log line carries the reason.
+                try {
+                    $this->handler->handle($msg->getBody());
+                } catch (\Throwable $e) {
+                    error_log(sprintf('[ERROR] build job failed: %s', $e->getMessage()));
+                } finally {
+                    $msg->ack();
+                }
             },
         );
 
