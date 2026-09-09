@@ -49,16 +49,11 @@ queue yet.
 
 ## Requirements
 
-- PHP >= 8.4 and [Composer](https://getcomposer.org/) for local runs
-- [Docker](https://www.docker.com/) with Compose v2 if you want to run the
-  containerized stack
-- `ext-amqp`, which `symfony/amqp-messenger` builds on. It is a *transitive*
-  platform requirement, so a host without it fails `composer install` itself,
-  not just `messenger:consume builds`. Install it with
-  [PIE](https://github.com/php/pie) (the image does the same), or skip it with
-  `composer install --ignore-platform-req=ext-amqp` — the test suite runs
-  without the extension, only the consumer needs it.
-- A running `publish` RabbitMQ broker — this repo does not run its own broker
+- PHP >= 8.5 and [Composer](https://getcomposer.org/) for local runs — the same
+  version the runtime image ships, so there is only one supported PHP
+- [Docker](https://www.docker.com/) with Compose v2 for the containerized dev stack
+- A running `publish` RabbitMQ broker (see [Docker](#docker-dev-stack) below) — this
+  repo does not run its own broker
 
 ## Environment variables
 

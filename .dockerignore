@@ -1,0 +1,9 @@
+.git
+.gitignore
+.dockerignore
+.github
+var
+vendor
+.phpunit.cache
+.env.local
+.env.*.local
