@@ -1,14 +1,31 @@
 # syntax=docker/dockerfile:1
 FROM php:8.5-cli-alpine
 
-# php-amqplib hard-requires ext-sockets. It ships with PHP but is not built in
-# the official images, so it has to be compiled in. linux-headers is needed on
-# top of $PHPIZE_DEPS because sockets.c includes <linux/sock_diag.h>, which
-# Alpine does not ship by default. Both are build-time only, hence the virtual
-# package and the immediate cleanup.
-RUN apk add --no-cache --virtual .build-deps $PHPIZE_DEPS linux-headers \
-    && docker-php-ext-install -j"$(nproc)" sockets \
-    && apk del .build-deps
+# Symfony Messenger's AMQP transport is built on ext-amqp, which links against
+# rabbitmq-c -- not php-amqplib/ext-sockets, which this replaced.
+#
+# PIE, not `pecl install`: PECL is deprecated in favour of PIE (the PHP
+# Installer for Extensions). PIE replaces the download/build/enable
+# orchestration only -- the extension still compiles against the rabbitmq-c
+# headers, which is why rabbitmq-c-dev is here. The headers are build-time
+# only; the rabbitmq-c runtime library has to stay.
+#
+# PIE is published as a binary-only image tagged `bin` (latest) or `x.y.z-bin`;
+# there is no `latest` tag to pull.
+COPY --from=ghcr.io/php/pie:bin /pie /usr/bin/pie
+
+# unzip is a PIE requirement rather than an amqp one: PIE downloads the
+# extension as a zip, and this base image ships neither unzip nor git to
+# unpack it.
+#
+# The final `php -m` check fails the build here if the extension did not
+# actually load, rather than letting composer install below report it as a
+# missing platform requirement.
+RUN apk add --no-cache rabbitmq-c \
+    && apk add --no-cache --virtual .build-deps $PHPIZE_DEPS rabbitmq-c-dev unzip \
+    && pie install --no-interaction --no-cache php-amqp/php-amqp \
+    && apk del .build-deps \
+    && php -m | grep -qx amqp
 
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
@@ -28,4 +45,4 @@ WORKDIR /app
 COPY composer.json composer.lock* ./
 RUN composer install --no-interaction --no-progress --no-scripts
 
-CMD ["php", "bin/console", "app:listen-for-build-jobs"]
+CMD ["php", "bin/console", "messenger:consume", "builds", "-vv"]

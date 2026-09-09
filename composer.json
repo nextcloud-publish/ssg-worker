@@ -8,13 +8,16 @@
         "ext-ctype": "*",
         "ext-iconv": "*",
         "nextcloud-publish/ssg-library": "dev-main",
-        "php-amqplib/php-amqplib": "^3.7.4",
+        "symfony/amqp-messenger": "8.1.*",
         "symfony/console": "8.1.*",
         "symfony/dotenv": "8.1.*",
         "symfony/flex": "^2",
         "symfony/framework-bundle": "8.1.*",
         "symfony/http-client": "8.1.*",
+        "symfony/messenger": "8.1.*",
+        "symfony/property-access": "8.1.*",
         "symfony/runtime": "8.1.*",
+        "symfony/serializer": "8.1.*",
         "symfony/yaml": "8.1.*"
     },
     "repositories": [
@@ -24,7 +27,7 @@
         }
     ],
     "require-dev": {
-        "phpunit/phpunit": "^13.3",
+        "phpunit/phpunit": "^13.3.3",
         "psy/psysh": "^0.12.24"
     },
     "config": {

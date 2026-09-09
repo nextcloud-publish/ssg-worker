@@ -6,9 +6,27 @@ namespace App\Messaging;
 
 use App\Content\ArchiveExtractor;
 use App\Content\ContentDownloader;
+use App\Message\BuildJob;
 use App\Rendering\SiteRenderer;
 use App\Storage\JobWorkspace;
+use Symfony\Component\Messenger\Attribute\AsMessageHandler;
 
+/**
+ * Turns one q.builds message into a built site: provisions the job's folders,
+ * downloads its content archive, extracts it and renders the pages.
+ *
+ * Takes an already-decoded BuildJob: Messenger's serializer owns parsing the
+ * body and resolving it to a class, so a message that does not deserialize
+ * never reaches here.
+ *
+ * Throwing is how a bad job is reported: with max_retries: 0 on the transport,
+ * Messenger logs and acks rather than redelivering one that cannot succeed.
+ *
+ * error_log() rather than an injected PSR logger, for now -- a real logger
+ * setup (channel, formatting, destination) is a separate decision to make
+ * later, not a byproduct of this transport migration.
+ */
+#[AsMessageHandler]
 final class BuildJobHandler
 {
     /**
@@ -28,24 +46,17 @@ final class BuildJobHandler
 
     /**
      * @throws \InvalidArgumentException if the static_site_id is unsafe
-     * @throws \RuntimeException         if the message is unusable or any step fails
+     * @throws \RuntimeException         if any step fails
      */
-    public function handle(string $messageBody): void
+    public function __invoke(BuildJob $message): void
     {
-        $job = $this->decode($messageBody);
-
         // Names the job's folder; JobWorkspace, not this class, decides
         // whether it is safe to use as one.
-        $staticSiteId = $this->requireString($job, 'static_site_id');
-
-        // Rendered as the header link on every generated page.
-        $siteTitle = $this->requireString($job, 'slug');
-
-        $jobDir = $this->workspace->createJobDirectories($staticSiteId);
+        $jobDir = $this->workspace->createJobDirectories($message->static_site_id);
 
         error_log(sprintf('[INFO] prepared job workdir %s', $jobDir));
 
-        $url = $this->requireString($job, 'content_download_url');
+        $url = $message->content_download_url;
         $inputDir = $jobDir . '/' . JobWorkspace::INPUT_DIR;
         $file = $this->downloader->download($url, $inputDir);
 
@@ -63,40 +74,10 @@ final class BuildJobHandler
 
         error_log(sprintf('[INFO] extracted %s into %s', $file, $unarchivedDir));
 
+        // The slug is rendered as the header link on every generated page.
         $outputDir = $jobDir . '/' . JobWorkspace::OUTPUT_DIR;
-        $pages = $this->renderer->render($unarchivedDir, $outputDir, $siteTitle);
+        $pages = $this->renderer->render($unarchivedDir, $outputDir, $message->slug);
 
         error_log(sprintf('[INFO] rendered %d page(s) into %s', $pages, $outputDir));
-    }
-
-    /**
-     * @return array<string,mixed>
-     */
-    private function decode(string $messageBody): array
-    {
-        try {
-            $job = json_decode($messageBody, true, 512, JSON_THROW_ON_ERROR);
-        } catch (\JsonException $e) {
-            throw new \RuntimeException('Message body is not valid JSON: ' . $e->getMessage(), 0, $e);
-        }
-
-        if (!\is_array($job)) {
-            throw new \RuntimeException('Message body is not a JSON object.');
-        }
-
-        return $job;
-    }
-
-    /**
-     * @param array<string,mixed> $job
-     */
-    private function requireString(array $job, string $key): string
-    {
-        $value = $job[$key] ?? null;
-        if (!\is_string($value) || $value === '') {
-            throw new \RuntimeException("Message is missing a usable {$key}.");
-        }
-
-        return $value;
     }
 }

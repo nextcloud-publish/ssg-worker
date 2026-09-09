@@ -1,0 +1,43 @@
+# see https://symfony.com/doc/current/messenger.html
+framework:
+    messenger:
+        transports:
+            builds:
+                # Same DSN variable publish uses (and the same one this app's
+                # own compose file already sets) -- deliberately not Flex's
+                # MESSENGER_TRANSPORT_DSN, so the two services cannot drift
+                # apart on which env var actually wires the broker.
+                dsn: '%env(AMQP_DSN)%'
+
+                # Matches publish's transport: publish serializes with
+                # messenger.transport.symfony_serializer (JSON, not PHP
+                # serialize()), so this side has to decode the same way for
+                # the `type` header to resolve to a real class.
+                serializer: messenger.transport.symfony_serializer
+
+                options:
+                    # The broker imports its whole topology from
+                    # publish/docker/rabbitmq-config/definitions.json at boot
+                    # and owns it -- this side must never try to declare or
+                    # bind anything either.
+                    auto_setup: false
+
+                    # Must match the broker's heartbeat in
+                    # publish/docker/rabbitmq-config/rabbitmq.conf, or a quiet
+                    # socket looks dead.
+                    heartbeat: '%env(int:AMQP_HEARTBEAT)%'
+
+                    # REQUIRED for consuming: without this, the transport
+                    # derives a queue name from the DSN path instead (falling
+                    # back to "messages"), and would silently listen on the
+                    # wrong queue -- q.builds is the one the broker actually
+                    # has, and auto_setup being off means it never gets
+                    # declared on our end anyway.
+                    queues:
+                        q.builds: ~
+
+                retry_strategy:
+                    # Log and ack, never redeliver. There is no dead-letter
+                    # queue and no retry counter on the broker side either, so
+                    # retrying here would be a new, unreviewed behavior change.
+                    max_retries: 0
