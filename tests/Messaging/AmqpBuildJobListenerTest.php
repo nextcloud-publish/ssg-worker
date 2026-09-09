@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Tests\Messaging;
 
 use App\Messaging\AmqpBuildJobListener;
+use App\Messaging\BuildJobHandler;
+use App\Storage\JobWorkspace;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -18,6 +20,15 @@ final class AmqpBuildJobListenerTest extends TestCase
         putenv('AMQP_DSN');
     }
 
+    /**
+     * The handler is never reached -- every test fails while connecting -- so
+     * its base directory does not have to exist.
+     */
+    private function listener(): AmqpBuildJobListener
+    {
+        return new AmqpBuildJobListener(new BuildJobHandler(new JobWorkspace('/tmp')));
+    }
+
     public function testThrowsWhenAmqpDsnIsNotSet(): void
     {
         putenv('AMQP_DSN');
@@ -25,7 +36,7 @@ final class AmqpBuildJobListenerTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('AMQP_DSN is not set.');
 
-        (new AmqpBuildJobListener())->listen();
+        $this->listener()->listen();
     }
 
     public function testThrowsWhenAmqpDsnIsEmpty(): void
@@ -35,7 +46,7 @@ final class AmqpBuildJobListenerTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('AMQP_DSN is not set.');
 
-        (new AmqpBuildJobListener())->listen();
+        $this->listener()->listen();
     }
 
     public function testThrowsWhenAmqpDsnIsMissingAHost(): void
@@ -48,7 +59,7 @@ final class AmqpBuildJobListenerTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('AMQP_DSN is missing a host.');
 
-        (new AmqpBuildJobListener())->listen();
+        $this->listener()->listen();
     }
 
     public function testThrowsWhenAmqpDsnIsMissingAPort(): void
@@ -58,7 +69,7 @@ final class AmqpBuildJobListenerTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('AMQP_DSN is missing a port.');
 
-        (new AmqpBuildJobListener())->listen();
+        $this->listener()->listen();
     }
 
     public function testThrowsWhenAmqpDsnIsMissingAUser(): void
@@ -68,7 +79,7 @@ final class AmqpBuildJobListenerTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('AMQP_DSN is missing a user.');
 
-        (new AmqpBuildJobListener())->listen();
+        $this->listener()->listen();
     }
 
     public function testThrowsWhenAmqpDsnIsMissingAPassword(): void
@@ -78,6 +89,6 @@ final class AmqpBuildJobListenerTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('AMQP_DSN is missing a password.');
 
-        (new AmqpBuildJobListener())->listen();
+        $this->listener()->listen();
     }
 }

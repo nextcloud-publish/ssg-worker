@@ -18,3 +18,11 @@ services:
 
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones
+
+    App\Storage\JobWorkspace:
+        arguments:
+            # Root of the volume shared with publish. No default: it must be
+            # the same directory publish uses, so a missing variable has to
+            # fail loudly rather than send builds somewhere nothing looks.
+            # Set in integration-test/docker-compose.yml.
+            $baseDir: '%env(JOB_STORAGE_DIR)%'
