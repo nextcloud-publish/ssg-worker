@@ -4,10 +4,14 @@ declare(strict_types=1);
 
 namespace App\Tests\Messaging;
 
+use App\Content\ArchiveExtractor;
+use App\Content\ContentDownloader;
 use App\Messaging\AmqpBuildJobListener;
 use App\Messaging\BuildJobHandler;
+use App\Rendering\SiteRenderer;
 use App\Storage\JobWorkspace;
 use PHPUnit\Framework\TestCase;
+use Symfony\Component\HttpClient\MockHttpClient;
 
 /**
  * listen() connects lazily -- it only reads AMQP_DSN once it's called, so a
@@ -21,12 +25,17 @@ final class AmqpBuildJobListenerTest extends TestCase
     }
 
     /**
-     * The handler is never reached -- every test fails while connecting -- so
-     * its base directory does not have to exist.
+     * Never reached: every test fails on the DSN before a message can arrive,
+     * so the collaborators only have to satisfy the constructor.
      */
     private function listener(): AmqpBuildJobListener
     {
-        return new AmqpBuildJobListener(new BuildJobHandler(new JobWorkspace('/tmp')));
+        return new AmqpBuildJobListener(new BuildJobHandler(
+            new ContentDownloader(new MockHttpClient(), maxMegabytes: 1),
+            new ArchiveExtractor(),
+            new SiteRenderer(),
+            new JobWorkspace('/tmp'),
+        ));
     }
 
     public function testThrowsWhenAmqpDsnIsNotSet(): void

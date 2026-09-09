@@ -4,23 +4,31 @@ declare(strict_types=1);
 
 namespace App\Messaging;
 
+use App\Content\ArchiveExtractor;
+use App\Content\ContentDownloader;
+use App\Rendering\SiteRenderer;
 use App\Storage\JobWorkspace;
 
-/**
- * Provisions one q.builds message's folders, and nothing else.
- *
- * Split out of AmqpBuildJobListener so the per-message logic is testable
- * without a broker -- the listener cannot run without a live connection.
- */
 final class BuildJobHandler
 {
-    public function __construct(private readonly JobWorkspace $workspace)
-    {
+    /**
+     * Where the archive is unpacked, relative to the job's input/ folder.
+     * Kept out of the archive's own directory so that whatever renders the
+     * site is handed a path containing nothing but the page tree.
+     */
+    public const UNARCHIVED_DIR = 'content_unarchived';
+
+    public function __construct(
+        private readonly ContentDownloader $downloader,
+        private readonly ArchiveExtractor $extractor,
+        private readonly SiteRenderer $renderer,
+        private readonly JobWorkspace $workspace,
+    ) {
     }
 
     /**
-     * @throws \RuntimeException         if the message is unusable
      * @throws \InvalidArgumentException if the static_site_id is unsafe
+     * @throws \RuntimeException         if the message is unusable or any step fails
      */
     public function handle(string $messageBody): void
     {
@@ -30,9 +38,35 @@ final class BuildJobHandler
         // whether it is safe to use as one.
         $staticSiteId = $this->requireString($job, 'static_site_id');
 
+        // Rendered as the header link on every generated page.
+        $siteTitle = $this->requireString($job, 'slug');
+
         $jobDir = $this->workspace->createJobDirectories($staticSiteId);
 
         error_log(sprintf('[INFO] prepared job workdir %s', $jobDir));
+
+        $url = $this->requireString($job, 'content_download_url');
+        $inputDir = $jobDir . '/' . JobWorkspace::INPUT_DIR;
+        $file = $this->downloader->download($url, $inputDir);
+
+        error_log(sprintf(
+            '[INFO] downloaded %s to %s (%d bytes)',
+            $url,
+            $file,
+            (int) @filesize($file),
+        ));
+
+        // Into its own folder rather than next to the archive: this is the
+        // path the site generator gets handed, and it must contain only pages.
+        $unarchivedDir = $inputDir . '/' . self::UNARCHIVED_DIR;
+        $this->extractor->extract($file, $unarchivedDir);
+
+        error_log(sprintf('[INFO] extracted %s into %s', $file, $unarchivedDir));
+
+        $outputDir = $jobDir . '/' . JobWorkspace::OUTPUT_DIR;
+        $pages = $this->renderer->render($unarchivedDir, $outputDir, $siteTitle);
+
+        error_log(sprintf('[INFO] rendered %d page(s) into %s', $pages, $outputDir));
     }
 
     /**

@@ -1,35 +1,37 @@
 # ssg-worker
 
-A minimal Symfony 8.1 console worker. No HTTP, no database, no templating —
-it connects to RabbitMQ, listens for build jobs on the `q.builds` queue (the
-same queue `publish` enqueues onto), and creates each job's `input/` + `output/`
-folder pair on the volume it shares with `publish`. Progress and failures are
-logged via PHP's `error_log()` (captured by `docker logs` either way).
+A minimal Symfony 8.1 console worker. No HTTP server, no database, no
+templating — it connects to RabbitMQ, listens for build jobs on the `q.builds`
+queue (the same queue `publish` enqueues onto), creates each job's `input/` +
+`output/` folder pair on the volume it shares with `publish`, and downloads the
+job's content archive into `input/`. Progress and failures are logged via PHP's
+`error_log()` (captured by `docker logs` either way).
 
-It does not build sites yet: the folders it creates stay empty.
+It does not build sites yet: the archive is left packed and `output/` stays
+empty.
 
 ## Build job messages
 
-The worker reads one field from each `q.builds` message and ignores the rest:
+The worker requires two fields from each `q.builds` message and ignores the
+rest:
 
-| Field            | Used for                                                        |
-| ---------------- | --------------------------------------------------------------- |
-| `static_site_id` | names the job's folder under `JOB_STORAGE_DIR`                  |
+| Field                  | Used for                                                        |
+| ---------------------- | --------------------------------------------------------------- |
+| `static_site_id`       | names the job's folder under `JOB_STORAGE_DIR`                  |
+| `content_download_url` | the archive to fetch; only `http`/`https` are accepted          |
 
-`static_site_id` reaches this service from an HTTP payload by way of the queue
-and becomes a directory name on a shared volume, so it has to match
-`/^[A-Za-z0-9_-]{1,128}$/` — the same allow-list `publish` applies. Dots are
-excluded outright rather than filtered out, which keeps a bare `..` from
-passing as a valid name. Deliberately wider than the UUID `publish` actually
-sends: the two sides have to agree on which jobs are buildable, so this
-allow-list only changes in both repos at once.
+`static_site_id` arrives from an HTTP payload and becomes a directory name on a
+shared volume, so it has to match `/^[A-Za-z0-9_-]{1,128}$/` — the same
+allow-list `publish` applies, so it only changes in both repos at once. Dots are
+excluded outright, which keeps a bare `..` from passing.
 
-Creating the folders is idempotent — a rebuild of the same site reuses them,
-and leaves their contents alone.
+Creating the folders is idempotent — a rebuild of the same site reuses them and
+leaves their contents alone.
 
-A message that is malformed, or whose folders cannot be created, is logged and
-**acked**, not requeued: there is no dead-letter queue or retry counter yet, so
-requeuing a job that can never succeed would redeliver it forever.
+A message that is malformed, or whose folders cannot be created, or whose
+download fails, is logged and **acked**, not requeued: there is no dead-letter
+queue or retry counter yet, so requeuing a job that can never succeed would
+redeliver it forever.
 
 ## Requirements
 
@@ -45,11 +47,12 @@ requeuing a job that can never succeed would redeliver it forever.
 | `AMQP_DSN`         | yes      | none    | RabbitMQ connection string, e.g. `amqp://app:secret@rabbitmq:5672/%2f` |
 | `AMQP_HEARTBEAT`   | no       | `10`    | AMQP heartbeat interval in seconds; must match the broker's setting  |
 | `JOB_STORAGE_DIR`  | yes      | none    | Root of the job volume shared with `publish`; the worker creates `<static_site_id>/input` + `/output` under it |
+| `MAX_DOWNLOAD_MB`  | yes      | none    | Ceiling on a single content download, in megabytes (e.g. `256`); minimum `1` |
 
-`AMQP_DSN` and `JOB_STORAGE_DIR` have no fallback — an unset variable is a
-broken deployment. `JOB_STORAGE_DIR` in particular has to name the same
-directory `publish` uses, so guessing a path would send builds somewhere
-nothing else looks at rather than surfacing the misconfiguration.
+`AMQP_DSN`, `JOB_STORAGE_DIR` and `MAX_DOWNLOAD_MB` have no fallback — an unset
+variable is a broken deployment. `JOB_STORAGE_DIR` has to name the same
+directory `publish` uses, and the download cap guards that shared volume, so
+guessing either would hide a misconfiguration rather than surface it.
 
 ## Local development
 
@@ -58,6 +61,7 @@ composer install
 mkdir -p /tmp/ssg-jobs
 AMQP_DSN="amqp://app:secret@localhost:5672/%2f" \
 JOB_STORAGE_DIR=/tmp/ssg-jobs \
+MAX_DOWNLOAD_MB=256 \
 php bin/console app:listen-for-build-jobs
 ```
 
@@ -95,9 +99,10 @@ docker compose -f docker/compose.dev.yaml logs -f worker
 php bin/phpunit
 ```
 
-`JobWorkspace` and `BuildJobHandler` are covered in full over a temp directory
-— every rejected message shape, the traversal cases, and idempotency across
-rebuilds all run offline.
+`JobWorkspace`, `ContentDownloader` and `BuildJobHandler` are covered in full —
+`MockHttpClient` stands in for the network and a temp directory for the volume,
+so status codes, oversized bodies, broken transfers, the traversal cases,
+idempotency across rebuilds and every rejected message shape run offline.
 
 Tests also cover `AmqpBuildJobListener`'s fail-fast behaviour on a
 missing/invalid `AMQP_DSN` — it connects lazily, so this is testable without a
@@ -107,10 +112,11 @@ broker. The actual listen loop isn't unit tested, same as `publish`'s
 ## Layout
 
 ```
-config/                    Symfony configuration (no routing — no HTTP)
+config/                    Symfony configuration (no routing — no HTTP server)
 src/Command/                ListenForBuildJobsCommand: app:listen-for-build-jobs
+src/Content/                ContentDownloader: streams content_download_url to disk, scheme-checked and size-capped
 src/Messaging/               AmqpBuildJobListener: connects, listens on q.builds, hands each message to the handler
-                            BuildJobHandler: validates one message and prepares its workspace
+                            BuildJobHandler: validates one message, prepares its workspace and downloads its content
 src/Storage/                JobWorkspace: creates <static_site_id>/input + /output under JOB_STORAGE_DIR
 tests/                      PHPUnit tests for the above
 docker/
