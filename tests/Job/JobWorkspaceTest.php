@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Storage;
+namespace App\Tests\Job;
 
-use App\Storage\JobWorkspace;
+use App\Job\JobWorkspace;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 

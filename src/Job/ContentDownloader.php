@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace App\Content;
+namespace App\Job;
 
 use Symfony\Component\HttpClient\Response\StreamWrapper;
 use Symfony\Contracts\HttpClient\Exception\ExceptionInterface as HttpClientException;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
 
 /**
- * Fetches a build job's content archive into that job's input/ folder.
+ * Fetches a build job's content archive into that job's input folder.
  *
  * The URL travels from the original build request through the queue, so it is
  * treated as untrusted throughout: only http/https are fetched, redirects are
@@ -18,26 +18,20 @@ use Symfony\Contracts\HttpClient\HttpClientInterface;
  */
 final class ContentDownloader
 {
-    /**
-     * Fixed rather than taken from the URL: the URL is attacker-influenced and
-     * must not get to choose filenames on a shared volume. It also records the
-     * assumption that what arrives is a gzipped tar -- sniffing the real format
-     * is a problem for the step that unpacks it.
-     */
+    // Fixed filename for the content archive in the input folder
     public const FILENAME = 'content.tar.gz';
 
-    # TODO: This is a bit tricky with our integration test which does not use HTTPS.
+    // Allow http for testing
     private const ALLOWED_SCHEMES = ['http', 'https'];
 
     private readonly int $maxBytes;
 
     public function __construct(
         private readonly HttpClientInterface $httpClient,
-        // Ceiling on a single download, injected from MAX_DOWNLOAD_MB by
-        // config/services.yaml. Taken in megabytes because that is the unit
-        // whoever sets the limit actually thinks in; everything below this
-        // line works in bytes, so it is converted once, here.
         int $maxMegabytes,
+        private readonly int $maxDurationSeconds = 300,
+        private readonly int $timeoutSeconds = 30,
+        private readonly int $maxRedirects = 3,
     ) {
         if ($maxMegabytes < 1) {
             throw new \InvalidArgumentException(
@@ -68,9 +62,11 @@ final class ContentDownloader
 
         $handle = @fopen($target, 'wb');
         if ($handle === false) {
-            $reason = error_get_last()['message'] ?? 'unknown error';
-
-            throw new \RuntimeException("Could not open {$target} for writing: {$reason}");
+            throw new \RuntimeException(sprintf(
+                'Could not open %s for writing: %s',
+                $target,
+                error_get_last()['message'] ?? 'unknown error',
+            ));
         }
 
         $completed = false;
@@ -98,10 +94,10 @@ final class ContentDownloader
     private function streamTo(string $url, $handle): int
     {
         $response = $this->httpClient->request('GET', $url, [
-            'max_duration' => 300,   // whole transfer, so a slow drip cannot hang the worker
-            'timeout' => 30,         // idle time between chunks
-            'max_redirects' => 3,
-            'buffer' => false,       // stream it; never hold the archive in memory
+            'max_duration' => $this->maxDurationSeconds,  // whole transfer, so a slow drip cannot hang the worker
+            'timeout' => $this->timeoutSeconds,            // idle time between chunks
+            'max_redirects' => $this->maxRedirects,
+            'buffer' => false,                             // stream it; never hold the archive in memory
         ]);
 
         // Blocks until the headers land.

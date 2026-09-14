@@ -2,11 +2,13 @@
 
 declare(strict_types=1);
 
-namespace App\Storage;
+namespace App\Job;
 
 /**
  * Creates a build job's input/output folder pair under its static_site_id, on
- * the volume shared with publish. Mirrors publish's App\Storage\JobWorkspace.
+ * the volume shared with publish. Mirrors publish's App\Storage\JobWorkspace
+ * (different namespace here: this worker groups its whole per-job pipeline
+ * under App\Job rather than by storage/content/rendering concern).
  */
 final class JobWorkspace
 {
@@ -49,22 +51,9 @@ final class JobWorkspace
 
         $jobDir = rtrim($this->baseDir, '/') . '/' . $staticSiteId;
 
-        $this->ensureDir($jobDir . '/' . self::INPUT_DIR);
-        $this->ensureDir($jobDir . '/' . self::OUTPUT_DIR);
+        Helper::ensureDir($jobDir . '/' . self::INPUT_DIR);
+        Helper::ensureDir($jobDir . '/' . self::OUTPUT_DIR);
 
         return $jobDir;
-    }
-
-    /**
-     * The second is_dir() covers a concurrent build creating $dir between our
-     * check and our mkdir().
-     */
-    private function ensureDir(string $dir): void
-    {
-        if (!is_dir($dir) && !@mkdir($dir, 0o755, true) && !is_dir($dir)) {
-            $reason = error_get_last()['message'] ?? 'unknown error';
-
-            throw new \RuntimeException("Could not create job directory {$dir}: {$reason}");
-        }
     }
 }

@@ -2,35 +2,34 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Messaging;
+namespace App\Tests\Message;
 
-use App\Content\ArchiveExtractor;
-use App\Content\ContentDownloader;
+use App\Job\ArchiveExtractor;
+use App\Job\ContentDownloader;
+use App\Job\JobWorkspace;
+use App\Job\SiteRenderer;
 use App\Message\BuildJob;
-use App\Messaging\BuildJobHandler;
-use App\Rendering\SiteRenderer;
-use App\Storage\JobWorkspace;
+use App\Message\BuildJobHandler;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpClient\MockHttpClient;
 use Symfony\Component\HttpClient\Response\MockResponse;
 
 /**
- * Real collaborators rather than test doubles: they are final, and this way
- * the handler's rejections are proven by the request never being issued
- * (getRequestsCount() === 0) instead of by a mock expectation.
+ * Constructs BuildJobHandler with its real dependencies (ContentDownloader,
+ * ArchiveExtractor, SiteRenderer, JobWorkspace) instead of mocks -- they are
+ * final classes, so PHP can't mock them anyway. Rejections are proven by the
+ * request never being made (getRequestsCount() === 0), not by a mock
+ * expectation.
  *
- * The handler takes a decoded BuildJob, so there is nothing here about
- * malformed JSON or missing keys -- Messenger's serializer rejects those
- * before the handler is reached, and its transport is what logs and acks them.
+ * The handler takes an already-decoded BuildJob, so this file has no tests
+ * for malformed JSON or missing keys. Messenger's serializer rejects those
+ * before the handler runs; its transport logs and acks them.
  */
 final class BuildJobHandlerTest extends TestCase
 {
     private const SITE_ID = '11f5b798-6f34-4951-ad8b-bfd623ded5c2';
 
-    /**
-     * What a real Collectives publish endpoint looks like. Never actually
-     * fetched -- MockHttpClient answers before anything leaves the process.
-     */
+    // Mock Collective content download url for testing with correct structure.
     private const CONTENT_URL = 'https://some-nextcloud.org/apps/collectives/some-collective-1234/publish/markdown_bundle';
 
     private string $baseDir;
@@ -41,13 +40,13 @@ final class BuildJobHandlerTest extends TestCase
 
     protected function setUp(): void
     {
-        // Left uncreated: the handler provisions it, so its absence up front
-        // is what proves it did.
+        // Left uncreated here: the handler creates it, so starting without
+        // it is what proves that it did.
         $this->baseDir = sys_get_temp_dir() . '/worker-job-test-' . bin2hex(random_bytes(6));
 
-        // A real archive, not a placeholder string: the handler extracts what
-        // it downloads, so the response body has to be a valid tar.gz. Served
-        // from a factory rather than one response: a rebuild downloads twice.
+        // Must be a real archive, not a placeholder string, since the
+        // handler extracts what it downloads. Uses a factory instead of one
+        // response because a rebuild downloads it twice.
         $this->archiveBytes = $this->sampleArchiveBytes();
         $this->client = new MockHttpClient(fn (): MockResponse => new MockResponse($this->archiveBytes));
 
@@ -68,7 +67,7 @@ final class BuildJobHandlerTest extends TestCase
     }
 
     /**
-     * A minimal stand-in for legit_sample.tar.gz: pages at the archive root,
+     * A minimal replacement for legit_sample.tar.gz: pages at the archive root,
      * matching the shape of the real fixture.
      */
     private function sampleArchiveBytes(): string
@@ -144,20 +143,20 @@ final class BuildJobHandlerTest extends TestCase
         self::assertSame('# sample', file_get_contents($unarchived . '/Readme.md'));
         self::assertSame('# cats', file_get_contents($unarchived . '/Cats/Readme.md'));
 
-        // The point of the dedicated folder: what the site generator is handed
-        // contains pages only, with no archive sitting in the middle of them.
+        // The dedicated folder means the site generator only sees pages,
+        // with no archive file mixed in.
         self::assertFileDoesNotExist($unarchived . '/' . ContentDownloader::FILENAME);
         self::assertSame(
             ['Cats', 'Readme.md'],
             array_values(array_diff(scandir($unarchived), ['.', '..'])),
         );
 
-        // And input/ itself holds exactly the archive and that one folder.
+        // input/ itself holds exactly the archive and that one folder.
         $inInput = array_values(array_diff(scandir($this->jobDir() . '/input'), ['.', '..']));
         sort($inInput);
         self::assertSame([ContentDownloader::FILENAME, BuildJobHandler::UNARCHIVED_DIR], $inInput);
 
-        // And the site was rendered from that folder into output/.
+        // The site was rendered from that folder into output/.
         $index = $this->jobDir() . '/output/index.html';
         self::assertFileExists($index);
         self::assertFileExists($this->jobDir() . '/output/Cats/index.html');
@@ -171,8 +170,8 @@ final class BuildJobHandlerTest extends TestCase
 
     public function testLogsThePreparedWorkdir(): void
     {
-        // The only record a job leaves behind, so it has to name the folder
-        // -- otherwise it says nothing about which job, or which volume.
+        // The only record a job leaves behind, so the log message must name
+        // the folder -- otherwise it wouldn't say which job, or which volume.
         ($this->handler())($this->job());
 
         self::assertStringContainsString($this->jobDir(), (string) file_get_contents($this->logFile));
@@ -207,9 +206,10 @@ final class BuildJobHandlerTest extends TestCase
     }
 
     /**
-     * BuildJob types its fields as strings but cannot require them to be
-     * non-empty, so the collaborators are still the guard. These two pin that
-     * the typed message did not quietly drop the checks with the JSON parsing.
+     * BuildJob types its fields as strings but can't require them to be
+     * non-empty, so the collaborators still have to guard against that.
+     * These two tests confirm that moving to a typed message didn't
+     * silently drop those checks.
      */
     public function testRejectsAnEmptyStaticSiteId(): void
     {
@@ -239,7 +239,7 @@ final class BuildJobHandlerTest extends TestCase
     public function testAnUnsafeStaticSiteIdCreatesNothing(): void
     {
         // Duplicated from JobWorkspaceTest on purpose: only here does it
-        // show a message off the queue cannot steer writes off the volume.
+        // prove a message from the queue cannot write outside the volume.
         $escapee = dirname($this->baseDir) . '/worker-escaped-' . bin2hex(random_bytes(6));
 
         try {

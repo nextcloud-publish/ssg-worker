@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Content;
+namespace App\Tests\Job;
 
-use App\Content\ArchiveExtractor;
+use App\Job\ArchiveExtractor;
 use PHPUnit\Framework\TestCase;
 
 /**
