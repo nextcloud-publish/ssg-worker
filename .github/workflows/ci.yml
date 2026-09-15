@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  pull_request:
+
+# A newer push to the same PR makes the run in flight irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # The one supported PHP: what composer.json requires and what the
+  # Dockerfile ships. Keep those three in step.
+  PHP_VERSION: '8.5'
+  # MAX_DOWNLOAD_MB deliberately has no fallback (see config/services.yaml),
+  # so anything that compiles the container needs it resolvable. The value
+  # itself is irrelevant to linting and testing.
+  MAX_DOWNLOAD_MB: "256"
+  # ctype/iconv are required by composer.json, sockets by php-amqplib, and
+  # mbstring/json by ssg-library. phar and zlib back the tar.gz handling.
+  PHP_EXTENSIONS: ctype, iconv, sockets, mbstring, json, phar, zlib
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: ${{ env.PHP_EXTENSIONS }}
+          coverage: none
+
+      # Before installing, so a malformed manifest fails fast and cheaply.
+      # --no-check-publish: this is a deployable app, not a Packagist package,
+      # so it deliberately has no name or description to validate.
+      - name: Validate composer.json
+        run: composer validate --strict --no-check-publish
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@v3
+
+      - name: Check PHP syntax
+        run: find src tests -name '*.php' -print0 | xargs -0 -n1 php -l
+
+      - name: Lint YAML config
+        run: php bin/console lint:yaml config
+
+      # Catches arguments whose types do not match the constructors they are
+      # injected into -- the failure this app's hand-wired DI is most exposed
+      # to, and one no other check here would notice.
+      - name: Lint service container
+        run: php bin/console lint:container
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: ${{ env.PHP_EXTENSIONS }}
+          coverage: none
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@v3
+
+      # ArchiveExtractor shells out to tar, which the runner image provides.
+      - name: PHPUnit
+        run: vendor/bin/phpunit
+
+  image:
+    name: Build and push image
+    runs-on: ubuntu-latest
+    # Nothing gets published unless it lints and its tests pass.
+    needs: [lint, test]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=pr
+            type=sha,format=short
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # Root of the repo, not docker/: this repo keeps a single Dockerfile
+          # there. Naming a directory that does not exist fails in buildx
+          # ("lstat docker: no such file or directory"), not at checkout.
+          file: Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
