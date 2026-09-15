@@ -2,12 +2,13 @@
 
 declare(strict_types=1);
 
-namespace App\Rendering;
+namespace App\Job;
 
 use SsgLab\SiteBuilder;
 
 /**
- * Renders a fetched and extracted Collectives export into output folder
+ * Renders an extracted Collectives export (already unpacked into $pagesDir)
+ * into a static site under $outputDir.
  */
 final class SiteRenderer
 {
@@ -15,6 +16,7 @@ final class SiteRenderer
      * @return int number of rendered pages
      *
      * @throws \RuntimeException if $pagesDir is missing or holds no .md files
+     *                           (propagated from SiteBuilder::build())
      */
     public function render(string $pagesDir, string $outputDir, string $siteTitle): int
     {

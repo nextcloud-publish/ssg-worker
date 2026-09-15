@@ -2,31 +2,34 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Messaging;
+namespace App\Tests\Message;
 
-use App\Content\ArchiveExtractor;
-use App\Content\ContentDownloader;
-use App\Messaging\BuildJobHandler;
-use App\Rendering\SiteRenderer;
-use App\Storage\JobWorkspace;
-use PHPUnit\Framework\Attributes\DataProvider;
+use App\Job\ArchiveExtractor;
+use App\Job\ContentDownloader;
+use App\Job\JobWorkspace;
+use App\Job\SiteRenderer;
+use App\Message\BuildJob;
+use App\Message\BuildJobHandler;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpClient\MockHttpClient;
 use Symfony\Component\HttpClient\Response\MockResponse;
 
 /**
- * Real collaborators rather than test doubles: they are final, and this way
- * the handler's rejections are proven by the request never being issued
- * (getRequestsCount() === 0) instead of by a mock expectation.
+ * Constructs BuildJobHandler with its real dependencies (ContentDownloader,
+ * ArchiveExtractor, SiteRenderer, JobWorkspace) instead of mocks -- they are
+ * final classes, so PHP can't mock them anyway. Rejections are proven by the
+ * request never being made (getRequestsCount() === 0), not by a mock
+ * expectation.
+ *
+ * The handler takes an already-decoded BuildJob, so this file has no tests
+ * for malformed JSON or missing keys. Messenger's serializer rejects those
+ * before the handler runs; its transport logs and acks them.
  */
 final class BuildJobHandlerTest extends TestCase
 {
     private const SITE_ID = '11f5b798-6f34-4951-ad8b-bfd623ded5c2';
 
-    /**
-     * What a real Collectives publish endpoint looks like. Never actually
-     * fetched -- MockHttpClient answers before anything leaves the process.
-     */
+    // Mock Collective content download url for testing with correct structure.
     private const CONTENT_URL = 'https://some-nextcloud.org/apps/collectives/some-collective-1234/publish/markdown_bundle';
 
     private string $baseDir;
@@ -37,13 +40,13 @@ final class BuildJobHandlerTest extends TestCase
 
     protected function setUp(): void
     {
-        // Left uncreated: the handler provisions it, so its absence up front
-        // is what proves it did.
+        // Left uncreated here: the handler creates it, so starting without
+        // it is what proves that it did.
         $this->baseDir = sys_get_temp_dir() . '/worker-job-test-' . bin2hex(random_bytes(6));
 
-        // A real archive, not a placeholder string: the handler extracts what
-        // it downloads, so the response body has to be a valid tar.gz. Served
-        // from a factory rather than one response: a rebuild downloads twice.
+        // Must be a real archive, not a placeholder string, since the
+        // handler extracts what it downloads. Uses a factory instead of one
+        // response because a rebuild downloads it twice.
         $this->archiveBytes = $this->sampleArchiveBytes();
         $this->client = new MockHttpClient(fn (): MockResponse => new MockResponse($this->archiveBytes));
 
@@ -64,7 +67,7 @@ final class BuildJobHandlerTest extends TestCase
     }
 
     /**
-     * A minimal stand-in for legit_sample.tar.gz: pages at the archive root,
+     * A minimal replacement for legit_sample.tar.gz: pages at the archive root,
      * matching the shape of the real fixture.
      */
     private function sampleArchiveBytes(): string
@@ -100,24 +103,28 @@ final class BuildJobHandlerTest extends TestCase
     }
 
     /**
-     * @param array<string,mixed> $overrides
+     * The message as Messenger hands it over, already decoded.
      */
-    private function message(array $overrides = []): string
-    {
-        return (string) json_encode($overrides + [
-            'static_site_id' => self::SITE_ID,
-            'slug' => 'integration_test_collective',
-            'content_download_url' => self::CONTENT_URL,
-            'callback_status_url' => '',
-            'created_at' => '2026-09-03T13:00:09+00:00',
-        ]);
+    private function job(
+        string $staticSiteId = self::SITE_ID,
+        string $slug = 'integration_test_collective',
+        string $contentDownloadUrl = self::CONTENT_URL,
+    ): BuildJob {
+        return new BuildJob(
+            build_id: '16ef078ad37fd894',
+            static_site_id: $staticSiteId,
+            slug: $slug,
+            content_download_url: $contentDownloadUrl,
+            callback_status_url: '',
+            created_at: '2026-09-03T13:00:09+00:00',
+        );
     }
 
     public function testCreatesInputAndOutputDirectoriesForTheJob(): void
     {
         self::assertDirectoryDoesNotExist($this->jobDir());
 
-        $this->handler()->handle($this->message());
+        ($this->handler())($this->job());
 
         self::assertDirectoryExists($this->jobDir() . '/input');
         self::assertDirectoryExists($this->jobDir() . '/output');
@@ -125,7 +132,7 @@ final class BuildJobHandlerTest extends TestCase
 
     public function testDownloadsExtractsAndRendersIntoTheJobsFolders(): void
     {
-        $this->handler()->handle($this->message());
+        ($this->handler())($this->job());
 
         self::assertSame(1, $this->client->getRequestsCount());
 
@@ -136,20 +143,20 @@ final class BuildJobHandlerTest extends TestCase
         self::assertSame('# sample', file_get_contents($unarchived . '/Readme.md'));
         self::assertSame('# cats', file_get_contents($unarchived . '/Cats/Readme.md'));
 
-        // The point of the dedicated folder: what the site generator is handed
-        // contains pages only, with no archive sitting in the middle of them.
+        // The dedicated folder means the site generator only sees pages,
+        // with no archive file mixed in.
         self::assertFileDoesNotExist($unarchived . '/' . ContentDownloader::FILENAME);
         self::assertSame(
             ['Cats', 'Readme.md'],
             array_values(array_diff(scandir($unarchived), ['.', '..'])),
         );
 
-        // And input/ itself holds exactly the archive and that one folder.
+        // input/ itself holds exactly the archive and that one folder.
         $inInput = array_values(array_diff(scandir($this->jobDir() . '/input'), ['.', '..']));
         sort($inInput);
         self::assertSame([ContentDownloader::FILENAME, BuildJobHandler::UNARCHIVED_DIR], $inInput);
 
-        // And the site was rendered from that folder into output/.
+        // The site was rendered from that folder into output/.
         $index = $this->jobDir() . '/output/index.html';
         self::assertFileExists($index);
         self::assertFileExists($this->jobDir() . '/output/Cats/index.html');
@@ -163,9 +170,9 @@ final class BuildJobHandlerTest extends TestCase
 
     public function testLogsThePreparedWorkdir(): void
     {
-        // The only record a job leaves behind, so it has to name the folder
-        // -- otherwise it says nothing about which job, or which volume.
-        $this->handler()->handle($this->message());
+        // The only record a job leaves behind, so the log message must name
+        // the folder -- otherwise it wouldn't say which job, or which volume.
+        ($this->handler())($this->job());
 
         self::assertStringContainsString($this->jobDir(), (string) file_get_contents($this->logFile));
     }
@@ -173,27 +180,14 @@ final class BuildJobHandlerTest extends TestCase
     public function testIsIdempotentAcrossRebuildsOfTheSameSite(): void
     {
         // An existing workspace is the normal case, and its contents survive.
-        $this->handler()->handle($this->message());
+        ($this->handler())($this->job());
         file_put_contents($this->jobDir() . '/input/keep.md', '# keep');
 
-        $this->handler()->handle($this->message());
+        ($this->handler())($this->job());
 
         self::assertFileExists($this->jobDir() . '/input/keep.md');
         self::assertSame(2, $this->client->getRequestsCount());
         self::assertFileExists($this->jobDir() . '/output/index.html');
-    }
-
-    public function testRejectsAMessageWithoutASlug(): void
-    {
-        // The slug titles the rendered site, so a job without one cannot
-        // produce correct output -- reject before spending the download.
-        $payload = json_decode($this->message(), true);
-        unset($payload['slug']);
-
-        $this->assertRejects((string) json_encode($payload), 'slug');
-
-        // Checked before the workspace is provisioned, so nothing was created.
-        self::assertDirectoryDoesNotExist($this->baseDir);
     }
 
     public function testFailsWhenTheDownloadIsNotAValidArchive(): void
@@ -208,99 +202,54 @@ final class BuildJobHandlerTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('Extracting');
 
-        $handler->handle($this->message());
+        $handler($this->job());
     }
 
-    public function testRejectsMalformedJson(): void
+    /**
+     * BuildJob types its fields as strings but can't require them to be
+     * non-empty, so the collaborators still have to guard against that.
+     * These two tests confirm that moving to a typed message didn't
+     * silently drop those checks.
+     */
+    public function testRejectsAnEmptyStaticSiteId(): void
     {
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('not valid JSON');
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('static_site_id');
 
-        $this->handler()->handle('{not json');
-    }
-
-    public function testRejectsJsonThatIsNotAnObject(): void
-    {
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('not a JSON object');
-
-        $this->handler()->handle('"just a string"');
-    }
-
-    public function testRejectsAMissingContentDownloadUrl(): void
-    {
-        $this->assertRejects(
-            (string) json_encode(['static_site_id' => self::SITE_ID, 'slug' => 'some_collective']),
-            'content_download_url',
-        );
+        try {
+            ($this->handler())($this->job(staticSiteId: ''));
+        } finally {
+            self::assertDirectoryDoesNotExist($this->baseDir);
+            self::assertSame(0, $this->client->getRequestsCount());
+        }
     }
 
     public function testRejectsAnEmptyContentDownloadUrl(): void
     {
-        $this->assertRejects($this->message(['content_download_url' => '']), 'content_download_url');
-    }
+        $this->expectException(\InvalidArgumentException::class);
 
-    public function testRejectsANonStringContentDownloadUrl(): void
-    {
-        $this->assertRejects($this->message(['content_download_url' => 42]), 'content_download_url');
-    }
-
-    /**
-     * @return array<string, array{string}>
-     */
-    public static function provideUnusableStaticSiteIds(): array
-    {
-        return [
-            'missing' => ['{"slug":"some_collective"}'],
-            'empty' => ['{"static_site_id":""}'],
-            'not a string' => ['{"static_site_id":42}'],
-            'null' => ['{"static_site_id":null}'],
-        ];
-    }
-
-    #[DataProvider('provideUnusableStaticSiteIds')]
-    public function testRejectsAMessageWithoutAUsableStaticSiteId(string $body): void
-    {
-        $this->assertRejects($body, 'static_site_id');
-
-        // Checked before the workspace is provisioned, so nothing was created.
-        self::assertDirectoryDoesNotExist($this->baseDir);
+        try {
+            ($this->handler())($this->job(contentDownloadUrl: ''));
+        } finally {
+            self::assertSame(0, $this->client->getRequestsCount());
+            self::assertFileDoesNotExist($this->jobDir() . '/input/' . ContentDownloader::FILENAME);
+        }
     }
 
     public function testAnUnsafeStaticSiteIdCreatesNothing(): void
     {
         // Duplicated from JobWorkspaceTest on purpose: only here does it
-        // show a message off the queue cannot steer writes off the volume.
+        // prove a message from the queue cannot write outside the volume.
         $escapee = dirname($this->baseDir) . '/worker-escaped-' . bin2hex(random_bytes(6));
 
         try {
-            $this->handler()->handle($this->message([
-                'static_site_id' => '../' . basename($escapee),
-            ]));
+            ($this->handler())($this->job(staticSiteId: '../' . basename($escapee)));
             self::fail('Expected an InvalidArgumentException for a traversal id.');
         } catch (\InvalidArgumentException $e) {
             self::assertStringContainsString('static_site_id', $e->getMessage());
             self::assertDirectoryDoesNotExist($escapee);
             self::assertDirectoryDoesNotExist($this->baseDir);
             self::assertSame(0, $this->client->getRequestsCount());
-        }
-    }
-
-    /**
-     * Every rejection must happen before anything is fetched or written. The
-     * workspace itself may already exist -- static_site_id and slug are
-     * validated first, so a bad content_download_url is caught with the
-     * folders in place.
-     */
-    private function assertRejects(string $message, string $expectedInMessage): void
-    {
-        try {
-            $this->handler()->handle($message);
-            self::fail('Expected a RuntimeException mentioning ' . $expectedInMessage);
-        } catch (\RuntimeException $e) {
-            self::assertStringContainsString($expectedInMessage, $e->getMessage());
-            self::assertSame(0, $this->client->getRequestsCount());
-            self::assertFileDoesNotExist($this->jobDir() . '/input/' . ContentDownloader::FILENAME);
         }
     }
 }

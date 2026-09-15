@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Rendering;
+namespace App\Tests\Job;
 
-use App\Rendering\SiteRenderer;
+use App\Job\SiteRenderer;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Exercises the real ssg-library rather than a double: it only reads and
- * writes directories, so running it is cheap, and the point of these tests is
- * that the wiring to it actually produces a site.
+ * Uses the real ssg-library instead of a mock: it only reads and writes
+ * directories, so running it is cheap and checks the actual building process
+ * and the result.
  */
 final class SiteRendererTest extends TestCase
 {

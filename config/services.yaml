@@ -19,17 +19,30 @@ services:
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones
 
-    App\Storage\JobWorkspace:
+    # Explicit instead of #[AsMessageHandler]: pins the handler to the
+    # "builds" transport (from_transport) so it can never fire for a BuildJob
+    # arriving anywhere else, and keeps the message-class -> handler link
+    # readable here instead of via reflection on __invoke()'s parameter.
+    App\Message\BuildJobHandler:
+        tags:
+            - { name: messenger.message_handler, handles: App\Message\BuildJob, from_transport: builds }
+
+    App\Job\JobWorkspace:
         arguments:
             # Root of the volume shared with publish. No default: it must be
             # the same directory publish uses, so a missing variable has to
             # fail loudly rather than send builds somewhere nothing looks.
             # Set in integration-test/docker-compose.yml.
             $baseDir: '%env(JOB_STORAGE_DIR)%'
-    App\Content\ContentDownloader:
+    App\Job\ContentDownloader:
         arguments:
             # In megabytes. No fallback: the cap protects a volume shared with
             # publish and every other job, so a deployment that forgets to set
             # it should fail loudly rather than have a limit guessed for it.
             # Set in integration-test/docker-compose.yml.
             $maxMegabytes: '%env(int:MAX_DOWNLOAD_MB)%'
+            # HTTP client tuning for fetching the content archive; see
+            # ContentDownloader for what each one guards against.
+            $maxDurationSeconds: 300
+            $timeoutSeconds: 30
+            $maxRedirects: 3
