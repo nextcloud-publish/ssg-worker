@@ -15,13 +15,17 @@ env:
   # The one supported PHP: what composer.json requires and what the
   # Dockerfile ships. Keep those three in step.
   PHP_VERSION: '8.5'
-  # MAX_DOWNLOAD_MB deliberately has no fallback (see config/services.yaml),
-  # so anything that compiles the container needs it resolvable. The value
-  # itself is irrelevant to linting and testing.
+  # MAX_DOWNLOAD_MB and JOB_STORAGE_DIR deliberately have no fallback (see
+  # config/services.yaml), so anything that compiles the container needs them
+  # resolvable. The values themselves are irrelevant to linting and testing --
+  # nothing here writes to the volume.
   MAX_DOWNLOAD_MB: "256"
-  # ctype/iconv are required by composer.json, sockets by php-amqplib, and
-  # mbstring/json by ssg-library. phar and zlib back the tar.gz handling.
-  PHP_EXTENSIONS: ctype, iconv, sockets, mbstring, json, phar, zlib
+  JOB_STORAGE_DIR: /tmp/ssg-ci/build_temp
+  # ctype/iconv are required by composer.json, amqp by symfony/amqp-messenger
+  # -- that last one is a hard platform requirement, so composer install itself
+  # fails without it. mbstring/json are used by ssg-library, and phar and zlib
+  # back the tar.gz handling.
+  PHP_EXTENSIONS: ctype, iconv, amqp, mbstring, json, phar, zlib
 
 jobs:
   lint:
