@@ -1,3 +1,12 @@
 # see https://symfony.com/doc/current/reference/configuration/framework.html
 framework:
     secret: '%env(APP_SECRET)%'
+
+when@test:
+    framework:
+        # Makes non-public services reachable through static::getContainer().
+        # Needed by MessageContractTest, which asserts on the wire format the
+        # app's OWN serializer produces rather than one built by hand in the
+        # test -- the point being to catch a drift between the two repos, which
+        # a hand-built serializer could not.
+        test: true

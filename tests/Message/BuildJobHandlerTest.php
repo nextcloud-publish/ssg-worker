@@ -8,8 +8,11 @@ use App\Job\ArchiveExtractor;
 use App\Job\ContentDownloader;
 use App\Job\JobWorkspace;
 use App\Job\SiteRenderer;
+use App\Message\BuildFailed;
 use App\Message\BuildJob;
 use App\Message\BuildJobHandler;
+use App\Message\BuildSucceeded;
+use App\Tests\Support\RecordingBus;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpClient\MockHttpClient;
 use Symfony\Component\HttpClient\Response\MockResponse;
@@ -24,10 +27,17 @@ use Symfony\Component\HttpClient\Response\MockResponse;
  * The handler takes an already-decoded BuildJob, so this file has no tests
  * for malformed JSON or missing keys. Messenger's serializer rejects those
  * before the handler runs; its transport logs and acks them.
+ *
+ * NOTE ON WHAT "FAILURE" MEANS HERE. A failed build no longer throws: the
+ * handler reports it as a BuildFailed message and returns, so the BuildJob is
+ * acked. The tests below therefore assert on what reached the bus. The one
+ * thing that does still propagate is a bus that cannot dispatch, because a
+ * broker outage has to be retried rather than swallowed.
  */
 final class BuildJobHandlerTest extends TestCase
 {
     private const SITE_ID = '11f5b798-6f34-4951-ad8b-bfd623ded5c2';
+    private const BUILD_ID = '16ef078ad37fd894';
 
     // Mock Collective content download url for testing with correct structure.
     private const CONTENT_URL = 'https://some-nextcloud.org/apps/collectives/some-collective-1234/publish/markdown_bundle';
@@ -35,6 +45,7 @@ final class BuildJobHandlerTest extends TestCase
     private string $baseDir;
     private string $archiveBytes;
     private MockHttpClient $client;
+    private RecordingBus $bus;
     private string $logFile;
     private string|false $previousErrorLog;
 
@@ -49,6 +60,7 @@ final class BuildJobHandlerTest extends TestCase
         // response because a rebuild downloads it twice.
         $this->archiveBytes = $this->sampleArchiveBytes();
         $this->client = new MockHttpClient(fn (): MockResponse => new MockResponse($this->archiveBytes));
+        $this->bus = new RecordingBus();
 
         // error_log() writes to stderr/syslog by default, neither of which
         // a test can assert against. Restored in tearDown().
@@ -87,19 +99,22 @@ final class BuildJobHandlerTest extends TestCase
         return $bytes;
     }
 
-    private function handler(): BuildJobHandler
-    {
+    private function handler(
+        ?MockHttpClient $client = null,
+        ?RecordingBus $bus = null,
+    ): BuildJobHandler {
         return new BuildJobHandler(
-            new ContentDownloader($this->client, maxMegabytes: 1),
+            new ContentDownloader($client ?? $this->client, maxMegabytes: 1),
             new ArchiveExtractor(),
             new SiteRenderer(),
             new JobWorkspace($this->baseDir),
+            $bus ?? $this->bus,
         );
     }
 
     private function jobDir(): string
     {
-        return $this->baseDir . '/' . self::SITE_ID;
+        return $this->baseDir . '/' . self::SITE_ID . '/' . self::BUILD_ID;
     }
 
     /**
@@ -111,7 +126,7 @@ final class BuildJobHandlerTest extends TestCase
         string $contentDownloadUrl = self::CONTENT_URL,
     ): BuildJob {
         return new BuildJob(
-            build_id: '16ef078ad37fd894',
+            build_id: self::BUILD_ID,
             static_site_id: $staticSiteId,
             slug: $slug,
             content_download_url: $contentDownloadUrl,
@@ -128,6 +143,19 @@ final class BuildJobHandlerTest extends TestCase
 
         self::assertDirectoryExists($this->jobDir() . '/input');
         self::assertDirectoryExists($this->jobDir() . '/output');
+    }
+
+    /**
+     * The job directory is keyed on build_id as well as static_site_id, so the
+     * result worker can tell "already promoted" from "the next build of this
+     * site is still running", and so a rebuild never inherits pages that were
+     * deleted from the collective.
+     */
+    public function testKeysTheJobDirectoryOnBothSiteAndBuild(): void
+    {
+        ($this->handler())($this->job());
+
+        self::assertDirectoryExists($this->baseDir . '/' . self::SITE_ID . '/' . self::BUILD_ID);
     }
 
     public function testDownloadsExtractsAndRendersIntoTheJobsFolders(): void
@@ -177,9 +205,10 @@ final class BuildJobHandlerTest extends TestCase
         self::assertStringContainsString($this->jobDir(), (string) file_get_contents($this->logFile));
     }
 
-    public function testIsIdempotentAcrossRebuildsOfTheSameSite(): void
+    public function testIsIdempotentAcrossRedeliveriesOfTheSameBuild(): void
     {
-        // An existing workspace is the normal case, and its contents survive.
+        // An existing workspace is the normal case for a redelivery, and its
+        // contents survive.
         ($this->handler())($this->job());
         file_put_contents($this->jobDir() . '/input/keep.md', '# keep');
 
@@ -190,19 +219,40 @@ final class BuildJobHandlerTest extends TestCase
         self::assertFileExists($this->jobDir() . '/output/index.html');
     }
 
-    public function testFailsWhenTheDownloadIsNotAValidArchive(): void
+    // --- outcome reporting ------------------------------------------------
+
+    public function testReportsSuccessWithTheFieldsTheResultWorkerNeeds(): void
     {
-        $handler = new BuildJobHandler(
-            new ContentDownloader(new MockHttpClient(new MockResponse('not an archive')), maxMegabytes: 1),
-            new ArchiveExtractor(),
-            new SiteRenderer(),
-            new JobWorkspace($this->baseDir),
+        ($this->handler())($this->job());
+
+        self::assertSame(1, $this->bus->count());
+
+        $outcome = $this->bus->last();
+        self::assertInstanceOf(BuildSucceeded::class, $outcome);
+        self::assertSame(self::BUILD_ID, $outcome->build_id);
+        self::assertSame(self::SITE_ID, $outcome->static_site_id);
+        self::assertSame('integration_test_collective', $outcome->slug);
+
+        // Two pages in the fixture: the root Readme and Cats/.
+        self::assertSame(2, $outcome->pages);
+        self::assertNotSame('', $outcome->finished_at);
+    }
+
+    public function testReportsFailureInsteadOfThrowingWhenTheDownloadIsNotAnArchive(): void
+    {
+        $handler = $this->handler(
+            client: new MockHttpClient(new MockResponse('not an archive')),
         );
 
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('Extracting');
-
         $handler($this->job());
+
+        $outcome = $this->bus->last();
+        self::assertInstanceOf(BuildFailed::class, $outcome);
+
+        // The real cause has to survive into the message body. This is the
+        // whole reason outcomes are explicit messages rather than a broker
+        // dead-letter, whose x-first-death-reason would only say "rejected".
+        self::assertStringContainsString('Extracting', $outcome->error);
     }
 
     /**
@@ -211,29 +261,25 @@ final class BuildJobHandlerTest extends TestCase
      * These two tests confirm that moving to a typed message didn't
      * silently drop those checks.
      */
-    public function testRejectsAnEmptyStaticSiteId(): void
+    public function testReportsFailureForAnEmptyStaticSiteId(): void
     {
-        $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('static_site_id');
+        ($this->handler())($this->job(staticSiteId: ''));
 
-        try {
-            ($this->handler())($this->job(staticSiteId: ''));
-        } finally {
-            self::assertDirectoryDoesNotExist($this->baseDir);
-            self::assertSame(0, $this->client->getRequestsCount());
-        }
+        $outcome = $this->bus->last();
+        self::assertInstanceOf(BuildFailed::class, $outcome);
+        self::assertStringContainsString('static_site_id', $outcome->error);
+
+        self::assertDirectoryDoesNotExist($this->baseDir);
+        self::assertSame(0, $this->client->getRequestsCount());
     }
 
-    public function testRejectsAnEmptyContentDownloadUrl(): void
+    public function testReportsFailureForAnEmptyContentDownloadUrl(): void
     {
-        $this->expectException(\InvalidArgumentException::class);
+        ($this->handler())($this->job(contentDownloadUrl: ''));
 
-        try {
-            ($this->handler())($this->job(contentDownloadUrl: ''));
-        } finally {
-            self::assertSame(0, $this->client->getRequestsCount());
-            self::assertFileDoesNotExist($this->jobDir() . '/input/' . ContentDownloader::FILENAME);
-        }
+        self::assertInstanceOf(BuildFailed::class, $this->bus->last());
+        self::assertSame(0, $this->client->getRequestsCount());
+        self::assertFileDoesNotExist($this->jobDir() . '/input/' . ContentDownloader::FILENAME);
     }
 
     public function testAnUnsafeStaticSiteIdCreatesNothing(): void
@@ -242,14 +288,64 @@ final class BuildJobHandlerTest extends TestCase
         // prove a message from the queue cannot write outside the volume.
         $escapee = dirname($this->baseDir) . '/worker-escaped-' . bin2hex(random_bytes(6));
 
-        try {
-            ($this->handler())($this->job(staticSiteId: '../' . basename($escapee)));
-            self::fail('Expected an InvalidArgumentException for a traversal id.');
-        } catch (\InvalidArgumentException $e) {
-            self::assertStringContainsString('static_site_id', $e->getMessage());
-            self::assertDirectoryDoesNotExist($escapee);
-            self::assertDirectoryDoesNotExist($this->baseDir);
-            self::assertSame(0, $this->client->getRequestsCount());
-        }
+        ($this->handler())($this->job(staticSiteId: '../' . basename($escapee)));
+
+        $outcome = $this->bus->last();
+        self::assertInstanceOf(BuildFailed::class, $outcome);
+        self::assertStringContainsString('static_site_id', $outcome->error);
+
+        self::assertDirectoryDoesNotExist($escapee);
+        self::assertDirectoryDoesNotExist($this->baseDir);
+        self::assertSame(0, $this->client->getRequestsCount());
+    }
+
+    /**
+     * The failure path still carries the callback URL, or the client would
+     * never learn that the build it asked for is not coming.
+     */
+    public function testAFailureStillCarriesTheCallbackUrl(): void
+    {
+        $job = new BuildJob(
+            build_id: self::BUILD_ID,
+            static_site_id: '',
+            slug: 'x',
+            content_download_url: self::CONTENT_URL,
+            callback_status_url: 'https://cloud.example.org/status/1234',
+            created_at: '2026-09-03T13:00:09+00:00',
+        );
+
+        ($this->handler())($job);
+
+        $outcome = $this->bus->last();
+        self::assertInstanceOf(BuildFailed::class, $outcome);
+        self::assertSame('https://cloud.example.org/status/1234', $outcome->callback_status_url);
+    }
+
+    // --- a broken BROKER is not a broken build ----------------------------
+
+    public function testABusFailureOnTheSuccessPathPropagates(): void
+    {
+        // Must NOT be swallowed: the build is finished, so acking it here would
+        // leave a rendered site nobody is ever told about. Throwing lets the
+        // transport retry the BuildJob instead.
+        $handler = $this->handler(bus: new RecordingBus(new \RuntimeException('broker is down')));
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('broker is down');
+
+        $handler($this->job());
+    }
+
+    public function testABusFailureOnTheFailurePathPropagates(): void
+    {
+        $handler = $this->handler(
+            client: new MockHttpClient(new MockResponse('not an archive')),
+            bus: new RecordingBus(new \RuntimeException('broker is down')),
+        );
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('broker is down');
+
+        $handler($this->job());
     }
 }
