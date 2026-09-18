@@ -1,3 +1,10 @@
 # see https://symfony.com/doc/current/reference/configuration/framework.html
 framework:
     secret: '%env(APP_SECRET)%'
+
+when@test:
+    framework:
+        # Makes non-public services reachable through static::getContainer().
+        # Needed by the first kernel-booting tests in this repo; without it
+        # KernelTestCase::getContainer() throws.
+        test: true
