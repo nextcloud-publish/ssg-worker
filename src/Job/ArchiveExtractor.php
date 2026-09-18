@@ -18,12 +18,28 @@ namespace App\Job;
  */
 final class ArchiveExtractor
 {
+    /** Directory mode for the extracted content: worker-private, never served. */
+    private const EXTRACT_DIR_MODE = 0o750;
+
+    /**
+     * How much of tar's output makes it into the exception.
+     *
+     * tar prints one line per problem member, so a pathological archive can
+     * produce megabytes. That does not just make a long failure callback: the
+     * message ends up in an ErrorDetailsStamp, which travels as an AMQP HEADER
+     * on the retry republish, and RabbitMQ's default frame_max is 128 KiB. An
+     * unbounded message would make the retry publish itself fail, inside
+     * Worker::ack() where nothing catches it.
+     */
+    private const MAX_TAR_OUTPUT_LINES = 5;
+    private const MAX_TAR_OUTPUT_CHARS = 1000;
+
     /**
      * @throws \RuntimeException if the directory cannot be created or tar fails
      */
     public function extract(string $archive, string $targetDir): void
     {
-        Helper::ensureDir($targetDir);
+        Filesystem::ensureDir($targetDir, self::EXTRACT_DIR_MODE);
 
         // captures tar's own error message for the exception below
         exec(
@@ -37,7 +53,11 @@ final class ArchiveExtractor
                 'Extracting %s failed (exit %d): %s',
                 $archive,
                 $exitCode,
-                implode(' ', $output),
+                mb_substr(
+                    implode(' ', \array_slice($output, 0, self::MAX_TAR_OUTPUT_LINES)),
+                    0,
+                    self::MAX_TAR_OUTPUT_CHARS,
+                ),
             ));
         }
     }

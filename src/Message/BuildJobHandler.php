@@ -4,65 +4,242 @@ declare(strict_types=1);
 
 namespace App\Message;
 
+use App\Callback\ErrorRedactor;
+use App\Callback\StatusNotifier;
 use App\Job\ArchiveExtractor;
+use App\Job\BuildPromoter;
+use App\Job\BuildQuarantine;
 use App\Job\ContentDownloader;
+use App\Job\JobLayout;
 use App\Job\JobWorkspace;
 use App\Job\SiteRenderer;
 
 /**
- * Handles build jobs messages reveived via q.builds into html:
- *  - creates the job's folders
- *  - downloads and extracts the content archive
- *  - renders the pages into html
+ * Builds a job from q.builds and owns its outcome: promote on success,
+ * quarantine and report on terminal failure, and in between let the transport
+ * redeliver.
  *
- * Registered as a message handler in services.yaml instead of via
- * #[AsMessageHandler] attribute.
+ * TWO EXCEPTION TYPES, and the whole handler turns on the difference:
+ *  - \InvalidArgumentException -- nothing a retry could change (an unsafe id or
+ *    slug, a URL we will not fetch, an archive with no pages). Reported now.
+ *  - \RuntimeException -- the environment might differ next time (disk,
+ *    network, a half-finished swap). Rethrown so Messenger redelivers it.
+ *
+ * THE CLIENT IS TOLD EXACTLY ONCE, by whichever delivery reaches a terminal
+ * state. A delivery that rethrows tells nobody: the message carries the reason
+ * forward in its ErrorDetailsStamp and the delivery that finds no attempt left
+ * reports it.
+ *
+ * Registered as a message handler in services.yaml instead of via the
+ * #[AsMessageHandler] attribute, which pins it to the "builds" transport.
  */
 final class BuildJobHandler
 {
     /** Folder where the archive is unpacked, relative to the job's input/ folder. */
     public const UNARCHIVED_DIR = 'content_unarchived';
 
+    /**
+     * What the callback says when a build failed on every attempt but the
+     * reason did not survive the trip back. See RetryCountMiddleware: the
+     * reason rides in a transport header, and a header is a weaker promise
+     * than a message body.
+     */
+    private const UNKNOWN_ERROR = 'The build failed on every attempt; the reason was not recorded.';
+
     public function __construct(
         private readonly ContentDownloader $contentDownloader,
         private readonly ArchiveExtractor $archiveExtractor,
         private readonly SiteRenderer $siteRenderer,
         private readonly JobWorkspace $jobWorkspace,
+        private readonly JobLayout $layout,
+        private readonly BuildPromoter $promoter,
+        private readonly BuildQuarantine $quarantine,
+        private readonly StatusNotifier $notifier,
+        private readonly ErrorRedactor $redactor,
+        /**
+         * MUST equal messenger.yaml's retry_strategy.max_retries for the builds
+         * transport; both read the %build.max_retries% parameter so they cannot
+         * drift. Too low and an attempt is thrown away unused; too high and
+         * this gate never fires, so the last failure is dropped unreported.
+         */
+        private readonly int $maxRetries,
     ) {
     }
 
     /**
-     * @throws \InvalidArgumentException if the static_site_id is unsafe
-     * @throws \RuntimeException         if any step fails
+     * $retryCount and $previousError are supplied by RetryCountMiddleware
+     * through a HandlerArgumentsStamp. They default so that a direct call
+     * (every test in this repo) and any dispatch that skips the middleware
+     * still work.
      */
-    public function __invoke(BuildJob $message): void
+    public function __invoke(BuildJob $message, int $retryCount = 0, ?string $previousError = null): void
     {
-        // Creates the job's input/output folders.
-        $jobDir = $this->jobWorkspace->createJobDirectories($message->static_site_id);
+        // THE GATE. max_retries: 2 means deliveries arrive with counts 0, 1, 2,
+        // and MultiplierRetryStrategy::isRetryable() ($retries < $maxRetries)
+        // refuses to redeliver after count 2. A build started on that last
+        // delivery would have nowhere to report a failure: throwing would have
+        // the message logged and dropped, returning would claim a success that
+        // never happened. So it does not build. It reports what the previous
+        // attempt hit, quarantines what the previous attempt left, and acks.
+        if ($retryCount >= $this->maxRetries) {
+            error_log(sprintf(
+                '[ERROR] build %s exhausted its %d attempts',
+                $message->build_id,
+                $this->maxRetries,
+            ));
+
+            $this->reportFailure($message, $previousError ?? self::UNKNOWN_ERROR);
+
+            return;
+        }
+
+        try {
+            $pages = $this->build($message);
+
+            // Promotion is inside the same try on purpose. A failed swap is a
+            // failed build as far as the client is concerned, and the retry
+            // that follows re-renders from scratch -- BuildPromoter picks up a
+            // complete staged release from the previous attempt if there is one.
+            $this->promoter->promote($message->static_site_id, $message->build_id, $message->slug);
+        } catch (\InvalidArgumentException $e) {
+            // Terminal on the first delivery. Spending the remaining attempts
+            // and ~75s of backoff on an unsafe slug only delays the answer.
+            $this->reportFailure($message, $e->getMessage());
+
+            return;
+        } catch (\RuntimeException $e) {
+            // Raw, with paths: this is the log, not the callback.
+            error_log(sprintf(
+                '[ERROR] build %s attempt %d of %d failed: %s',
+                $message->build_id,
+                $retryCount + 1,
+                $this->maxRetries,
+                $e->getMessage(),
+            ));
+
+            // Out to Messenger: AddErrorDetailsStampListener (priority 200)
+            // stamps this message onto the envelope before
+            // SendFailedMessageForRetryListener (priority 100) republishes it,
+            // so the next delivery can report it if it is the last.
+            throw $e;
+        }
+
+        error_log(sprintf(
+            '[INFO] published %s from build %s (%d page(s))',
+            $message->slug,
+            $message->build_id,
+            $pages,
+        ));
+
+        $this->report($message, StatusNotifier::STATUS_SUCCESS, pages: $pages);
+    }
+
+    /** Download, extract, render. Everything before the site goes live. */
+    private function build(BuildJob $message): int
+    {
+        // Wipes any previous attempt: SiteBuilder never clears its output dir,
+        // so a reused output/ would republish pages deleted from the source.
+        $jobDir = $this->jobWorkspace->reset(
+            $message->static_site_id,
+            $message->build_id,
+            $message->slug,
+        );
 
         error_log(sprintf('[INFO] prepared job workdir %s', $jobDir));
 
-        $url = $message->content_download_url;
-        $inputDir = $jobDir . '/' . JobWorkspace::INPUT_DIR;
-        $file = $this->contentDownloader->download($url, $inputDir);
+        $inputDir = $this->layout->buildInputDir($message->static_site_id, $message->build_id);
+        $file = $this->contentDownloader->download($message->content_download_url, $inputDir);
 
         error_log(sprintf(
             '[INFO] downloaded %s to %s (%d bytes)',
-            $url,
+            $message->content_download_url,
             $file,
             (int) @filesize($file),
         ));
 
-        // Extracted content assets
         $unarchivedDir = $inputDir . '/' . self::UNARCHIVED_DIR;
         $this->archiveExtractor->extract($file, $unarchivedDir);
 
         error_log(sprintf('[INFO] extracted %s into %s', $file, $unarchivedDir));
 
-        // slug is used as the site header on every page.
-        $outputDir = $jobDir . '/' . JobWorkspace::OUTPUT_DIR;
-        $pages = $this->siteRenderer->render($unarchivedDir, $outputDir, $message->slug);
+        $outputDir = $this->layout->buildOutputDir($message->static_site_id, $message->build_id);
+
+        // title, not slug: the slug is a directory name now and the allow-list
+        // that makes it safe excludes spaces. Empty means the message predates
+        // the field -- fall back rather than render a site titled "".
+        $title = $message->title !== '' ? $message->title : $message->slug;
+        $pages = $this->siteRenderer->render($unarchivedDir, $outputDir, $title);
 
         error_log(sprintf('[INFO] rendered %d page(s) into %s', $pages, $outputDir));
+
+        return $pages;
+    }
+
+    /**
+     * QUARANTINE FIRST, THEN CALL BACK. The move is what frees the job volume
+     * and preserves the evidence; the callback is what the client is waiting
+     * for. Neither is allowed to suppress the other.
+     */
+    private function reportFailure(BuildJob $message, string $error): void
+    {
+        try {
+            $this->quarantine->quarantine($message->static_site_id, $message->build_id);
+        } catch (\Throwable $e) {
+            // BuildQuarantine does not throw for a bad or missing job dir, but
+            // a real filesystem failure still comes out of moveDir(). A full
+            // disk must not cost the client its failure notice.
+            error_log(sprintf(
+                '[ERROR] could not quarantine build %s: %s',
+                $message->build_id,
+                $e->getMessage(),
+            ));
+        }
+
+        error_log(sprintf(
+            '[ERROR] build %s of %s failed: %s',
+            $message->build_id,
+            $message->static_site_id,
+            $error,
+        ));
+
+        $this->report($message, StatusNotifier::STATUS_FAILED, $error);
+    }
+
+    /**
+     * THE CALLBACK NEVER FAILS THE MESSAGE, and that is the one place this
+     * design knowingly gives something up.
+     *
+     * Letting StatusNotifier's exception out would have Messenger replay the
+     * whole handler -- download, extract, render, promote -- and it would spend
+     * the BUILD retry budget on an HTTP problem, so a slow client endpoint
+     * would end up reported as a failed build.
+     *
+     * The cost: a callback URL that is unreachable for the whole attempt means
+     * a site that is live and a client that never hears so, with the log as the
+     * only record. See docs/roadmap.md.
+     */
+    private function report(BuildJob $message, string $status, ?string $error = null, int $pages = 0): void
+    {
+        try {
+            $this->notifier->notify(
+                callbackStatusUrl: $message->callback_status_url,
+                status: $status,
+                buildId: $message->build_id,
+                staticSiteId: $message->static_site_id,
+                slug: $message->slug,
+                finishedAt: (new \DateTimeImmutable('now'))->format(\DateTimeInterface::ATOM),
+                pages: $pages,
+                // Redacted HERE, not inside StatusNotifier: the logs above want
+                // the real paths, the client must not get them.
+                error: $error === null ? null : $this->redactor->redact($error),
+            );
+        } catch (\Throwable $e) {
+            error_log(sprintf(
+                '[ERROR] could not report %s for build %s: %s',
+                $status,
+                $message->build_id,
+                $e->getMessage(),
+            ));
+        }
     }
 }

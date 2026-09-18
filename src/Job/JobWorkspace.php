@@ -5,54 +5,62 @@ declare(strict_types=1);
 namespace App\Job;
 
 /**
- * Creates a build job's input/output folder pair under its static_site_id, on
- * the volume shared with publish. Mirrors publish's App\Storage\JobWorkspace
- * (different namespace here: this worker groups its whole per-job pipeline
- * under App\Job rather than by storage/content/rendering concern).
+ * Prepares a build job's input/output folder pair on the job volume.
+ *
+ * Paths and the id allow-list both live in JobLayout, so there is exactly one
+ * place that turns a queue payload into a filesystem path.
  */
 final class JobWorkspace
 {
-    public const INPUT_DIR = 'input';
-    public const OUTPUT_DIR = 'output';
-
     /**
-     * static_site_id comes from an HTTP payload and becomes a directory name,
-     * so it is restricted to characters that cannot escape $baseDir. Dots are
-     * excluded outright, which keeps a bare ".." from passing.
+     * output/ and input/ are worker-private: nothing serves them, and the
+     * promoter widens the published copy to 0755 on its way out.
      */
-    private const SAFE_ID = '/^[A-Za-z0-9_-]{1,128}$/';
+    private const JOB_DIR_MODE = 0o750;
 
-    public function __construct(private readonly string $baseDir)
+    public function __construct(private readonly JobLayout $layout)
     {
-    }
-
-    public static function isValidStaticSiteId(string $staticSiteId): bool
-    {
-        return preg_match(self::SAFE_ID, $staticSiteId) === 1;
     }
 
     /**
-     * Creates {baseDir}/{staticSiteId}/input and /output. Idempotent: a
-     * rebuild reuses the existing folders rather than failing.
+     * Creates {buildTempDir}/{staticSiteId}/{buildId}/input and /output, wiping
+     * anything already there.
+     *
+     * NOT IDEMPOTENT, and that is the point. A retry carries the same build_id,
+     * and SsgLab\SiteBuilder never clears its output directory: a reused
+     * output/ would republish pages that a previous attempt wrote and the
+     * source no longer has. Keying on build_id is the other half -- two
+     * concurrent builds of one site used to share a directory.
      *
      * Separate exception types because they are separate problems: a bad id is
      * the caller's fault, an uncreatable directory the environment's.
      *
      * @return string the job directory holding the pair
      *
-     * @throws \InvalidArgumentException if the static_site_id is unsafe
-     * @throws \RuntimeException         if a directory cannot be created
+     * @throws \InvalidArgumentException if the static_site_id, build_id or slug is unsafe
+     * @throws \RuntimeException         if a directory cannot be created or removed
      */
-    public function createJobDirectories(string $staticSiteId): string
+    public function reset(string $staticSiteId, string $buildId, string $slug): string
     {
-        if (!self::isValidStaticSiteId($staticSiteId)) {
-            throw new \InvalidArgumentException('Unsafe static_site_id.');
+        JobLayout::assertSafeIds($staticSiteId, $buildId);
+
+        // Validated HERE, before a byte is downloaded, even though nothing in
+        // this method uses it: the slug names the published directory, and
+        // finding out it is unusable after a five-minute render wastes the
+        // attempt and delays the client's answer for nothing.
+        JobLayout::assertSafeSlug($slug);
+
+        $jobDir = $this->layout->jobDir($staticSiteId, $buildId);
+
+        if (is_dir($jobDir) && !Filesystem::removeDir($jobDir)) {
+            throw new \RuntimeException(sprintf(
+                'Could not clear the previous attempt at %s',
+                $jobDir,
+            ));
         }
 
-        $jobDir = rtrim($this->baseDir, '/') . '/' . $staticSiteId;
-
-        Helper::ensureDir($jobDir . '/' . self::INPUT_DIR);
-        Helper::ensureDir($jobDir . '/' . self::OUTPUT_DIR);
+        Filesystem::ensureDir($this->layout->buildInputDir($staticSiteId, $buildId), self::JOB_DIR_MODE);
+        Filesystem::ensureDir($this->layout->buildOutputDir($staticSiteId, $buildId), self::JOB_DIR_MODE);
 
         return $jobDir;
     }

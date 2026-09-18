@@ -1,10 +1,25 @@
 # see https://symfony.com/doc/current/messenger.html
 framework:
     messenger:
+        buses:
+            messenger.bus.default:
+                middleware:
+                    # Custom middleware is spliced between the framework's
+                    # default "before" group (which ends with
+                    # reject_redelivered_message_middleware) and its "after"
+                    # group (send_message, handle_message), so no ordering
+                    # directive is needed or possible.
+                    #
+                    # It has to run before handle_message: a handler is given
+                    # only the message, never the envelope, so the retry count
+                    # and the previous attempt's error have to be lifted off the
+                    # envelope and attached as extra handler arguments here, or
+                    # BuildJobHandler cannot see them at all.
+                    - App\Messenger\RetryCountMiddleware
+
         transports:
             builds:
-                # Same DSN variable publish uses (and the same one this app's
-                # own compose file already sets) -- deliberately not Flex's
+                # Same DSN variable publish uses -- deliberately not Flex's
                 # MESSENGER_TRANSPORT_DSN, so the two services cannot drift
                 # apart on which env var actually wires the broker.
                 dsn: '%env(AMQP_DSN)%'
@@ -18,26 +33,142 @@ framework:
                 options:
                     # The broker imports its whole topology from
                     # publish/docker/rabbitmq-config/definitions.json at boot
-                    # and owns it -- this side must never try to declare or
-                    # bind anything either.
+                    # and owns it.
+                    #
+                    # ONE EXCEPTION, which the retry_strategy below causes and
+                    # which is unavoidable: once delay > 0, Messenger declares
+                    # its own delay queues at runtime, because their names
+                    # encode the delay and cannot be known in advance. The
+                    # `delays` EXCHANGE they bind to is still the broker's to
+                    # declare, and it MUST be in definitions.json -- see the
+                    # retry_strategy comment.
                     auto_setup: false
 
                     # Must match the broker's heartbeat in
                     # publish/docker/rabbitmq-config/rabbitmq.conf, or a quiet
-                    # socket looks dead.
+                    # socket looks dead. Defaulted in .env, because the
+                    # when@test override below merges over this node rather
+                    # than replacing it -- so this still has to resolve when a
+                    # kernel test instantiates the transport with no broker
+                    # anywhere.
                     heartbeat: '%env(int:AMQP_HEARTBEAT)%'
 
-                    # REQUIRED for consuming: without this, the transport
-                    # derives a queue name from the DSN path instead (falling
-                    # back to "messages"), and would silently listen on the
-                    # wrong queue -- q.builds is the one the broker actually
-                    # has, and auto_setup being off means it never gets
-                    # declared on our end anyway.
                     queues:
-                        q.builds: ~
+                        # REQUIRED for consuming: without this, the transport
+                        # derives a queue name from the DSN path instead
+                        # (falling back to "messages"), and would silently
+                        # listen on a queue that does not exist.
+                        q.builds:
+                            # NOT a declaration -- auto_setup is off and the
+                            # consume path never declares. It is here because
+                            # countMessagesInQueues() DOES call declareQueue(),
+                            # so without it `messenger:stats` would redeclare
+                            # q.builds as a classic queue and get
+                            # PRECONDITION_FAILED (406) against the quorum queue
+                            # definitions.json created.
+                            arguments:
+                                x-queue-type: quorum
+
+                    exchange:
+                        # The empty name is the default exchange: the routing
+                        # key is taken as a queue name and the message is
+                        # delivered straight to it. Two reasons to spell it out
+                        # rather than leave it to the DSN fallback, which is a
+                        # literal "messages" exchange that does not exist:
+                        #
+                        # 1. It is the safety net for a future `delay: 0`. An
+                        #    undelayed retry is published through this exchange
+                        #    instead of the delays one, and publishing to a
+                        #    missing exchange is a 404 that closes the channel.
+                        # 2. The exchange name is interpolated into the delay
+                        #    QUEUE name, so leaving it as "messages" produces
+                        #    delay_messages_q.builds_15000_retry in the
+                        #    management UI -- a queue named after an exchange
+                        #    nobody ever created.
+                        #
+                        # It is NOT what makes today's retry path route
+                        # correctly: on a retry the dead-letter exchange is
+                        # hardcoded to '' regardless of this value.
+                        name: ''
+                        default_publish_routing_key: q.builds
 
                 retry_strategy:
-                    # Log and ack, never redeliver. There is no dead-letter
-                    # queue and no retry counter on the broker side either, so
-                    # retrying here would be a new, unreviewed behavior change.
-                    max_retries: 0
+                    # TWO BUILD ATTEMPTS, then a reported failure.
+                    #
+                    # Deliveries carry retry counts 0, 1, 2. BuildJobHandler
+                    # builds on 0 and 1; on 2 it does not build at all -- it
+                    # quarantines, POSTs `failed`, and returns normally so the
+                    # message is acked. So this is the BUILD retry budget, not a
+                    # transport-level one: a build that fails for its own
+                    # reasons is retried.
+                    #
+                    # Keep in step with %build.max_retries%, which is what
+                    # BuildJobHandler reads. They are the same parameter for
+                    # that reason.
+                    #
+                    # The budget is also spent by things that are NOT build
+                    # failures: a consumer_timeout requeue comes back with the
+                    # AMQP redelivered flag set, RejectRedeliveredMessageMiddleware
+                    # throws before the handler runs, and that counts. A site
+                    # that legitimately renders for longer than consumer_timeout
+                    # therefore burns both attempts and is reported as failed
+                    # without ever finishing. See docs/roadmap.md.
+                    max_retries: '%build.max_retries%'
+
+                    # REQUIRES the `delays` direct exchange to exist in
+                    # publish/docker/rabbitmq-config/definitions.json. With
+                    # auto_setup:false the transport skips declaring it but
+                    # STILL binds its runtime delay queues to it, and a bind to
+                    # a missing exchange is a 404 raised inside Worker::ack()
+                    # where nothing catches it: the consumer dies and the
+                    # message sits unacked until consumer_timeout. No test can
+                    # catch this -- the in-memory transport discards every
+                    # option here.
+                    #
+                    # Only two backoffs can ever fire: 15s after the first
+                    # failure, 60s after the second. Short first, so a transient
+                    # blip (a 503 from the content API, a moment of disk
+                    # pressure) is retried while the client is still watching;
+                    # longer second, so a flapping upstream gets a real window
+                    # instead of a second identical failure 15s later. Worst
+                    # case from first failure to `failed` callback: ~75s plus
+                    # the build durations.
+                    delay: 15000
+                    multiplier: 4
+
+                    # Equal to the last delay this budget can produce, so it
+                    # never binds today. It is here so that raising max_retries
+                    # later cannot silently start producing multi-minute waits
+                    # without someone revisiting this block.
+                    max_delay: 60000
+
+                    # 0, not the framework default of 0.1. The jittered value is
+                    # embedded in the delay QUEUE NAME, so any jitter declares a
+                    # fresh classic queue per message per attempt. They expire
+                    # on their own, so it is churn rather than a leak, but it
+                    # makes the broker unreadable and defeats the "is the worker
+                    # retrying?" check in the management UI. At 0 there are
+                    # exactly two.
+                    jitter: 0
+
+                # No failure_transport, deliberately. The handler owns the
+                # terminal outcome: on the last delivery it reports `failed` and
+                # acks, so there is nothing left to park. Adding one would also
+                # need a named fanout exchange to avoid an infinite loop, since
+                # a message sent to a failure transport inherits its original
+                # routing key.
+
+when@test:
+    framework:
+        messenger:
+            transports:
+                # No broker in tests. This scalar is normalized to
+                # {dsn: 'in-memory://'} and MERGED over the block above --
+                # options and retry_strategy survive, which is why
+                # AMQP_HEARTBEAT still has to resolve and why .env defaults it.
+                #
+                # InMemoryTransportFactory::createTransport() discards the whole
+                # options array, so nothing under `options:` above is exercised
+                # by any test. See docs/build-pipeline.md for what that leaves
+                # uncovered.
+                builds: 'in-memory://'

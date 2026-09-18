@@ -4,6 +4,15 @@
 # Files in the packages/ subdirectory configure your dependencies.
 # See also https://symfony.com/doc/current/service_container/import.html
 parameters:
+    # THE SAME NUMBER IN TWO PLACES, so it is a parameter rather than two
+    # literals: messenger.yaml decides when the transport stops redelivering,
+    # BuildJobHandler decides when to stop building and report. If they
+    # disagree, either an attempt is thrown away unused (handler too low) or
+    # the last failure is dropped unreported (handler too high).
+    #
+    # 2 means two build attempts: deliveries arrive with retry counts 0, 1 and
+    # 2; the first two build, the third only reports.
+    build.max_retries: 2
 
 services:
     # default configuration for services in *this* file
@@ -24,25 +33,80 @@ services:
     # arriving anywhere else, and keeps the message-class -> handler link
     # readable here instead of via reflection on __invoke()'s parameter.
     App\Message\BuildJobHandler:
+        arguments:
+            $maxRetries: '%build.max_retries%'
         tags:
             - { name: messenger.message_handler, handles: App\Message\BuildJob, from_transport: builds }
 
-    App\Job\JobWorkspace:
+    # Every path the worker touches, and the allow-list that makes a queue
+    # payload safe to use as one.
+    #
+    # These are three SEPARATE mounts in the dev stack: the build temp tree is a
+    # named volume, published is a bind mount so an external nginx can serve it.
+    # rename(2) rejects `old_path.mnt != new_path.mnt` with EXDEV and PHP has no
+    # directory fallback, so moves between them copy -- see
+    # Filesystem::moveDir(). Put FAILED_DIR on the same mount as
+    # JOB_STORAGE_DIR and quarantining becomes an instant rename instead of a
+    # copy of the archive plus its fully extracted duplicate.
+    #
+    # No defaults: a missing value means builds are published somewhere nothing
+    # serves, which should fail loudly. Set in publish/docker/dev/compose.yaml.
+    App\Job\JobLayout:
         arguments:
-            # Root of the volume shared with publish. No default: it must be
-            # the same directory publish uses, so a missing variable has to
-            # fail loudly rather than send builds somewhere nothing looks.
-            # Set in integration-test/docker-compose.yml.
-            $baseDir: '%env(JOB_STORAGE_DIR)%'
+            $buildTempDir: '%env(JOB_STORAGE_DIR)%'
+            $publishedDir: '%env(PUBLISHED_DIR)%'
+            $failedDir: '%env(FAILED_DIR)%'
+
+    # The same three roots, because it replaces them by name in a failure
+    # message before that message is POSTed to a client-supplied URL.
+    App\Callback\ErrorRedactor:
+        arguments:
+            $buildTempDir: '%env(JOB_STORAGE_DIR)%'
+            $publishedDir: '%env(PUBLISHED_DIR)%'
+            $failedDir: '%env(FAILED_DIR)%'
+
+    App\Callback\StatusNotifier:
+        arguments:
+            # SECURITY: callback_status_url comes from the original API caller
+            # and is validated nowhere upstream. This decoration is what stops
+            # an outbound POST at an internal address, and unlike a check in our
+            # own code it also covers redirects and DNS answers. A separate
+            # named service so ContentDownloader keeps the plain client.
+            $httpClient: '@app.http_client.no_private_network'
+            # The POST is the only unbounded part of the handler and the message
+            # stays unacked throughout, so the budget has to stay well inside
+            # rabbitmq.conf's consumer_timeout. Otherwise a slow endpoint
+            # becomes a redelivery rather than a retry.
+            $timeoutSeconds: 5
+            $maxDurationSeconds: 10
+            # A status callback that redirects has moved; following it would
+            # post a build result somewhere the client never nominated.
+            $maxRedirects: 0
+
+    app.http_client.no_private_network:
+        class: Symfony\Component\HttpClient\NoPrivateNetworkHttpClient
+        arguments: ['@http_client']
+
     App\Job\ContentDownloader:
         arguments:
             # In megabytes. No fallback: the cap protects a volume shared with
             # publish and every other job, so a deployment that forgets to set
             # it should fail loudly rather than have a limit guessed for it.
-            # Set in integration-test/docker-compose.yml.
+            # Set in publish/docker/dev/compose.yaml.
             $maxMegabytes: '%env(int:MAX_DOWNLOAD_MB)%'
             # HTTP client tuning for fetching the content archive; see
             # ContentDownloader for what each one guards against.
             $maxDurationSeconds: 300
             $timeoutSeconds: 30
             $maxRedirects: 3
+
+when@test:
+    services:
+        # Public alias for a private service, so a test can assert on the retry
+        # budget the container actually built instead of on the YAML that
+        # describes it. This is the only offline check of max_retries, delay,
+        # multiplier and jitter -- InMemoryTransportFactory discards every
+        # transport option, so nothing else about the transport is testable.
+        test.retry_strategy.builds:
+            alias: messenger.retry.multiplier_retry_strategy.builds
+            public: true
