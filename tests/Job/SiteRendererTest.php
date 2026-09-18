@@ -81,14 +81,33 @@ final class SiteRendererTest extends TestCase
         (new SiteRenderer())->render($this->tmp . '/nope', $this->outputDir, 'my_collective');
     }
 
-    public function testThrowsWhenThereIsNothingToRender(): void
+    /**
+     * InvalidArgumentException, not RuntimeException, and the distinction is
+     * what the retry budget turns on: an archive with no pages renders the same
+     * nothing however many times it is fetched, so the client is told at once
+     * instead of after both attempts and a minute of backoff.
+     */
+    public function testAnArchiveWithNoPagesIsATerminalContentError(): void
     {
         $empty = $this->tmp . '/empty';
         mkdir($empty, 0o755, true);
 
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('No .md files found');
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('no Markdown pages');
 
         (new SiteRenderer())->render($empty, $this->outputDir, 'my_collective');
+    }
+
+    /**
+     * A nested .md still counts: Collectives exports put pages in
+     * subdirectories, and only a tree with none at all is a content error.
+     */
+    public function testAPageInASubdirectoryIsEnoughToRender(): void
+    {
+        $nested = $this->tmp . '/nested';
+        mkdir($nested . '/Cats', 0o755, true);
+        file_put_contents($nested . '/Cats/index.md', "# Cats\n");
+
+        self::assertGreaterThan(0, (new SiteRenderer())->render($nested, $this->outputDir, 'my_collective'));
     }
 }
