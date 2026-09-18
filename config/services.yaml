@@ -41,29 +41,28 @@ services:
     # Every path the worker touches, and the allow-list that makes a queue
     # payload safe to use as one.
     #
-    # These are three SEPARATE mounts in the dev stack: the build temp tree is a
-    # named volume, published is a bind mount so an external nginx can serve it.
-    # rename(2) rejects `old_path.mnt != new_path.mnt` with EXDEV and PHP has no
-    # directory fallback, so moves between them copy -- see
-    # Filesystem::moveDir(). Put FAILED_DIR on the same mount as
-    # JOB_STORAGE_DIR and quarantining becomes an instant rename instead of a
-    # copy of the archive plus its fully extracted duplicate.
+    # WHETHER THESE TWO SHARE A MOUNT IS THE OPERATOR'S CHOICE, and the code does
+    # not assume either way. A deployment may bind-mount the published tree so an
+    # external nginx and a backup job can reach it while build scratch stays on a
+    # named volume, or put both on one filesystem. rename(2) rejects
+    # `old_path.mnt != new_path.mnt` with EXDEV and PHP has no directory
+    # fallback, so a move between them may be a copy -- Filesystem::moveDir()
+    # falls back to one. Staging inside PUBLISHED_DIR is what keeps the final
+    # swap a rename however they are mounted.
     #
     # No defaults: a missing value means builds are published somewhere nothing
     # serves, which should fail loudly. Set in publish/docker/dev/compose.yaml.
-    App\Job\JobLayout:
+    App\Job\JobWorkspace:
         arguments:
             $buildTempDir: '%env(JOB_STORAGE_DIR)%'
             $publishedDir: '%env(PUBLISHED_DIR)%'
-            $failedDir: '%env(FAILED_DIR)%'
 
-    # The same three roots, because it replaces them by name in a failure
-    # message before that message is POSTed to a client-supplied URL.
+    # The same two roots, because it replaces them by name in a failure message
+    # before that message is POSTed to a client-supplied URL.
     App\Callback\ErrorRedactor:
         arguments:
             $buildTempDir: '%env(JOB_STORAGE_DIR)%'
             $publishedDir: '%env(PUBLISHED_DIR)%'
-            $failedDir: '%env(FAILED_DIR)%'
 
     App\Callback\StatusNotifier:
         arguments:
@@ -89,10 +88,10 @@ services:
 
     App\Job\ContentDownloader:
         arguments:
-            # In megabytes. No fallback: the cap protects a volume shared with
-            # publish and every other job, so a deployment that forgets to set
-            # it should fail loudly rather than have a limit guessed for it.
-            # Set in publish/docker/dev/compose.yaml.
+            # In megabytes. No fallback: the cap is what stops one job filling
+            # the build volume every other job shares, so a deployment that
+            # forgets to set it should fail loudly rather than have a limit
+            # guessed for it. Set in publish/docker/dev/compose.yaml.
             $maxMegabytes: '%env(int:MAX_DOWNLOAD_MB)%'
             # HTTP client tuning for fetching the content archive; see
             # ContentDownloader for what each one guards against.

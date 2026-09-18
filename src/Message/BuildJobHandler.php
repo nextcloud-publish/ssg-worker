@@ -7,16 +7,13 @@ namespace App\Message;
 use App\Callback\ErrorRedactor;
 use App\Callback\StatusNotifier;
 use App\Job\ArchiveExtractor;
-use App\Job\BuildPromoter;
-use App\Job\BuildQuarantine;
 use App\Job\ContentDownloader;
-use App\Job\JobLayout;
 use App\Job\JobWorkspace;
 use App\Job\SiteRenderer;
 
 /**
- * Builds a job from q.builds and owns its outcome: promote on success,
- * quarantine and report on terminal failure, and in between let the transport
+ * Builds a job from q.builds and owns its outcome: publish on success, clean
+ * up and report on terminal failure, and in between let the transport
  * redeliver.
  *
  * TWO EXCEPTION TYPES, and the whole handler turns on the difference:
@@ -26,8 +23,8 @@ use App\Job\SiteRenderer;
  *    network, a half-finished swap). Rethrown so Messenger redelivers it.
  *
  * THE CLIENT IS TOLD EXACTLY ONCE, by whichever delivery reaches a terminal
- * state. A delivery that rethrows tells nobody: the message carries the reason
- * forward in its ErrorDetailsStamp and the delivery that finds no attempt left
+ * state. A delivery that rethrows tells nobody; the reason travels forward on
+ * the envelope's ErrorDetailsStamp, and the delivery that finds no attempt left
  * reports it.
  *
  * Registered as a message handler in services.yaml instead of via the
@@ -51,9 +48,6 @@ final class BuildJobHandler
         private readonly ArchiveExtractor $archiveExtractor,
         private readonly SiteRenderer $siteRenderer,
         private readonly JobWorkspace $jobWorkspace,
-        private readonly JobLayout $layout,
-        private readonly BuildPromoter $promoter,
-        private readonly BuildQuarantine $quarantine,
         private readonly StatusNotifier $notifier,
         private readonly ErrorRedactor $redactor,
         /**
@@ -80,7 +74,7 @@ final class BuildJobHandler
         // delivery would have nowhere to report a failure: throwing would have
         // the message logged and dropped, returning would claim a success that
         // never happened. So it does not build. It reports what the previous
-        // attempt hit, quarantines what the previous attempt left, and acks.
+        // attempt hit, clears what the previous attempt left, and acks.
         if ($retryCount >= $this->maxRetries) {
             error_log(sprintf(
                 '[ERROR] build %s exhausted its %d attempts',
@@ -96,11 +90,10 @@ final class BuildJobHandler
         try {
             $pages = $this->build($message);
 
-            // Promotion is inside the same try on purpose. A failed swap is a
-            // failed build as far as the client is concerned, and the retry
-            // that follows re-renders from scratch -- BuildPromoter picks up a
-            // complete staged release from the previous attempt if there is one.
-            $this->promoter->promote($message->static_site_id, $message->build_id, $message->slug);
+            // Publishing is inside the same try on purpose. A failed swap is
+            // a failed build as far as the client is concerned, and the retry
+            // that follows rebuilds from scratch.
+            $this->jobWorkspace->publish($message->static_site_id, $message->build_id, $message->slug);
         } catch (\InvalidArgumentException $e) {
             // Terminal on the first delivery. Spending the remaining attempts
             // and ~75s of backoff on an unsafe slug only delays the answer.
@@ -123,6 +116,10 @@ final class BuildJobHandler
             // so the next delivery can report it if it is the last.
             throw $e;
         }
+
+        // Before the callback, so the volume is freed even if the client's
+        // endpoint is slow. The site is already live at this point.
+        $this->jobWorkspace->clear($message->static_site_id, $message->build_id);
 
         error_log(sprintf(
             '[INFO] published %s from build %s (%d page(s))',
@@ -147,7 +144,7 @@ final class BuildJobHandler
 
         error_log(sprintf('[INFO] prepared job workdir %s', $jobDir));
 
-        $inputDir = $this->layout->buildInputDir($message->static_site_id, $message->build_id);
+        $inputDir = $this->jobWorkspace->buildInputDir($message->static_site_id, $message->build_id);
         $file = $this->contentDownloader->download($message->content_download_url, $inputDir);
 
         error_log(sprintf(
@@ -162,7 +159,7 @@ final class BuildJobHandler
 
         error_log(sprintf('[INFO] extracted %s into %s', $file, $unarchivedDir));
 
-        $outputDir = $this->layout->buildOutputDir($message->static_site_id, $message->build_id);
+        $outputDir = $this->jobWorkspace->buildOutputDir($message->static_site_id, $message->build_id);
 
         // title, not slug: the slug is a directory name now and the allow-list
         // that makes it safe excludes spaces. Empty means the message predates
@@ -176,24 +173,16 @@ final class BuildJobHandler
     }
 
     /**
-     * QUARANTINE FIRST, THEN CALL BACK. The move is what frees the job volume
-     * and preserves the evidence; the callback is what the client is waiting
-     * for. Neither is allowed to suppress the other.
+     * A FAILED BUILD KEEPS NOTHING. The wreckage is deleted, so the error in the
+     * callback and the log line below are the whole record. Keeping failures
+     * needs a database to index them by -- see docs/roadmap.md.
+     *
+     * clear() never throws, so cleanup can never cost the client the failure
+     * notice that is the point of this path.
      */
     private function reportFailure(BuildJob $message, string $error): void
     {
-        try {
-            $this->quarantine->quarantine($message->static_site_id, $message->build_id);
-        } catch (\Throwable $e) {
-            // BuildQuarantine does not throw for a bad or missing job dir, but
-            // a real filesystem failure still comes out of moveDir(). A full
-            // disk must not cost the client its failure notice.
-            error_log(sprintf(
-                '[ERROR] could not quarantine build %s: %s',
-                $message->build_id,
-                $e->getMessage(),
-            ));
-        }
+        $this->jobWorkspace->clear($message->static_site_id, $message->build_id);
 
         error_log(sprintf(
             '[ERROR] build %s of %s failed: %s',
@@ -206,17 +195,14 @@ final class BuildJobHandler
     }
 
     /**
-     * THE CALLBACK NEVER FAILS THE MESSAGE, and that is the one place this
-     * design knowingly gives something up.
+     * THE CALLBACK NEVER FAILS THE MESSAGE. Letting StatusNotifier's exception
+     * out would have Messenger replay the whole handler -- download, extract,
+     * render, publish -- spending the BUILD retry budget on an HTTP problem, so
+     * a slow client endpoint would end up reported as a failed build.
      *
-     * Letting StatusNotifier's exception out would have Messenger replay the
-     * whole handler -- download, extract, render, promote -- and it would spend
-     * the BUILD retry budget on an HTTP problem, so a slow client endpoint
-     * would end up reported as a failed build.
-     *
-     * The cost: a callback URL that is unreachable for the whole attempt means
-     * a site that is live and a client that never hears so, with the log as the
-     * only record. See docs/roadmap.md.
+     * The cost: a callback URL unreachable for the whole attempt leaves a site
+     * live and its client never told, with the log as the only record. See
+     * docs/roadmap.md.
      */
     private function report(BuildJob $message, string $status, ?string $error = null, int $pages = 0): void
     {
@@ -229,8 +215,8 @@ final class BuildJobHandler
                 slug: $message->slug,
                 finishedAt: (new \DateTimeImmutable('now'))->format(\DateTimeInterface::ATOM),
                 pages: $pages,
-                // Redacted HERE, not inside StatusNotifier: the logs above want
-                // the real paths, the client must not get them.
+                // Redacted here, not inside StatusNotifier: the logs above
+                // want the real paths, the client must not get them.
                 error: $error === null ? null : $this->redactor->redact($error),
             );
         } catch (\Throwable $e) {

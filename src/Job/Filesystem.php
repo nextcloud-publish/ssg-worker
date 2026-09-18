@@ -5,28 +5,22 @@ declare(strict_types=1);
 namespace App\Job;
 
 /**
- * The handful of filesystem primitives the build pipeline needs, each failing
- * with the operating system's own reason rather than a generic message.
+ * The filesystem primitives the build pipeline needs, each failing with the
+ * operating system's own reason rather than a generic message.
  *
- * That last part is the whole point of wrapping them: a full disk, an unmounted
- * volume, a permission problem and a typo'd environment variable all present as
- * "rename failed" otherwise, and what reaches the client is a failure callback
- * that says nothing useful.
- *
- * This replaced App\Job\Helper, which hardcoded 0750 and never chmod'd. The
- * difference is load-bearing and invisible to a unit test: output/ is created
- * at 0750 and the container runs as root, so a promoted tree left at that mode
- * is one whatever serves the site cannot traverse -- a 403 on every page. Hence
- * the explicit $mode here, with no default.
+ * That is the whole point of wrapping them: a full disk, an unmounted volume, a
+ * permission problem and a typo'd environment variable otherwise all present as
+ * "rename failed", and what reaches the client is a failure callback that says
+ * nothing useful.
  */
 final class Filesystem
 {
     /**
      * Creates $dir (and any missing parents), tolerating one already there.
      *
-     * Mode is explicit rather than defaulted, because the two callers want
-     * different things: the published tree has to be readable by whatever uid
-     * serves it, the quarantine tree deliberately does not.
+     * $mode has no default on purpose: the published tree must be readable by
+     * the uid that serves it and the build temp tree must not, and getting that
+     * backwards is a 403 on every page that no unit test would catch.
      *
      * @throws \RuntimeException if $dir does not exist and cannot be created
      */
@@ -74,23 +68,23 @@ final class Filesystem
      * rename(2) compares MOUNT POINTS, not filesystems -- the kernel rejects
      * `old_path.mnt != new_path.mnt` before it ever looks at the superblock --
      * and PHP's rename() has no fallback for directories, so a cross-mount move
-     * fails outright with EXDEV rather than degrading to a copy. The dev stack
-     * deliberately puts the build temp tree, the published tree and the
-     * quarantine tree on three separate mounts, so every move between them
-     * lands here.
+     * fails outright with EXDEV rather than degrading to a copy. Whether the
+     * build temp tree and the published tree share a mount is the operator's
+     * choice -- see JobWorkspace -- so staging a finished build may land on
+     * either path, and this exists so the code does not have to care.
      *
      * rename() is still tried first: it is atomic and instant when the two
      * happen to share a mount, which is the case in the unit tests and in any
      * deployment that consolidates them.
      *
-     * THE COPY IS NOT ATOMIC, and callers have to account for that. Copy into a
-     * scratch name on the destination mount and rename it into place there, so
-     * a crash mid-copy leaves the scratch name rather than a half-built tree
-     * something might publish.
+     * THE COPY IS NOT ATOMIC, and callers have to account for that.
+     * JobWorkspace::publish() copies into PUBLISHED_DIR/.staging rather than
+     * the live path, so a crash mid-copy leaves a half-built tree somewhere
+     * nothing serves.
      *
-     * It is also not instant: the message stays unacked for the whole copy, so
-     * a large enough site could in principle run past the broker's
-     * consumer_timeout (30s in dev, 300s in prod) and be redelivered.
+     * It is also not instant: the message stays unacked throughout, so a large
+     * enough site can run past the broker's consumer_timeout (120s in dev, 300s
+     * in prod) and be redelivered.
      *
      * @throws \RuntimeException with the real reason if the move fails
      */
@@ -104,8 +98,8 @@ final class Filesystem
 
         if (!self::removeDir($from)) {
             // The copy succeeded, so the move is done as far as the caller is
-            // concerned; only the source is left behind. Losing the whole
-            // promotion over a leftover scratch file would be worse.
+            // concerned and only the source is left behind. Failing the
+            // publish over a stray scratch directory would be worse.
             error_log(sprintf('[WARN] copied %s to %s but could not remove the source', $from, $to));
         }
     }
@@ -159,8 +153,8 @@ final class Filesystem
 
     /**
      * Recursively deletes $dir. Returns false instead of throwing: every caller
-     * here is cleaning up after work that already succeeded, and a leftover
-     * scratch file must never replay a completed promotion.
+     * is cleaning up after work that already succeeded, and a stray scratch
+     * directory must never undo it.
      *
      * Iterates rather than shelling out to `rm -rf`: the paths are derived from
      * queue input, and the failure mode of a mistake in a shell command is very

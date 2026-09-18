@@ -21,7 +21,6 @@ final class ErrorRedactorTest extends TestCase
         $this->redactor = new ErrorRedactor(
             '/opt/ssg/build_temp',
             '/opt/ssg/published',
-            '/opt/ssg/build_failed',
         );
     }
 
@@ -40,14 +39,14 @@ final class ErrorRedactorTest extends TestCase
         self::assertStringContainsString('tar: unexpected EOF in archive', $redacted);
     }
 
-    public function testNamesThePublishedAndFailedRootsToo(): void
+    public function testNamesThePublishedRootToo(): void
     {
         $redacted = $this->redactor->redact(
-            'Could not move /opt/ssg/published/.staging/abc.partial to /opt/ssg/build_failed/abc: No space left on device',
+            'Could not move /opt/ssg/build_temp/site-42/abc/output to /opt/ssg/published/.staging/abc: No space left on device',
         );
 
+        self::assertStringContainsString('<build>', $redacted);
         self::assertStringContainsString('<published>', $redacted);
-        self::assertStringContainsString('<failed>', $redacted);
         self::assertStringContainsString('No space left on device', $redacted);
         self::assertStringNotContainsString('/opt/ssg', $redacted);
     }
@@ -126,15 +125,15 @@ final class ErrorRedactorTest extends TestCase
     }
 
     /**
-     * FAILED_DIR on the same mount as JOB_STORAGE_DIR is the recommended
-     * layout, which makes one root a prefix of the other's parent. The longest
-     * root has to win, or a quarantine path would be reported as a build path.
+     * The published tree normally sits under the same parent as the build tree,
+     * which makes one root a prefix of the other. The longest has to win, or a
+     * published path would be reported as a build path.
      */
     public function testANestedRootIsNamedByItsOwnLabel(): void
     {
-        $redactor = new ErrorRedactor('/opt/ssg', '/opt/ssg/published', '/opt/ssg/published/deep');
+        $redactor = new ErrorRedactor('/opt/ssg', '/opt/ssg/published');
 
-        self::assertStringContainsString('<failed>', $redactor->redact('at /opt/ssg/published/deep/abc'));
         self::assertStringContainsString('<published>', $redactor->redact('at /opt/ssg/published/demo'));
+        self::assertStringContainsString('<build>', $redactor->redact('at /opt/ssg/build_temp/demo'));
     }
 }

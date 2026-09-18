@@ -24,7 +24,6 @@ env:
   MAX_DOWNLOAD_MB: "256"
   JOB_STORAGE_DIR: /tmp/ssg-ci/build_temp
   PUBLISHED_DIR: /tmp/ssg-ci/published
-  FAILED_DIR: /tmp/ssg-ci/build_failed
   # ctype/iconv are required by composer.json; amqp by symfony/amqp-messenger,
   # whose composer.json declares "ext-amqp": "*" -- a HARD platform
   # requirement, so `composer install` itself fails without it. mbstring/json

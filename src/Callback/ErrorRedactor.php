@@ -8,18 +8,18 @@ namespace App\Callback;
  * Strips the deployment's filesystem layout out of a failure message before it
  * is POSTed to a client-supplied URL.
  *
- * Every RuntimeException in the pipeline embeds an absolute path on purpose --
- * "Could not create /opt/ssg/build_temp/...", "Extracting /opt/.../content.tar.gz
- * failed", "No .md files found in ..." -- because that is what an operator
- * needs to diagnose it from a log. callback_status_url, though, is chosen by
- * whoever called the API, and sending the raw string there hands them a free
- * map of the volume layout, the mount names and how far this uid reaches.
+ * The pipeline's exceptions embed absolute paths on purpose, because that is
+ * what an operator needs from a log. callback_status_url is chosen by whoever
+ * called the API, so sending the raw string there hands them a map of the
+ * volume layout, the mount names and how far this uid reaches.
  *
- * So the two audiences get different strings, and that asymmetry is the entire
- * point of this class: BuildJobHandler logs the raw message and redacts only
- * on the way to the callback. The goal is to keep the message DIAGNOSTIC
- * without making it a disclosure -- "<build>/.../content.tar.gz" still says
- * which stage failed without saying where the volume is.
+ * Two audiences, two strings: BuildJobHandler logs the raw message and redacts
+ * only on the way to the callback. The result should stay DIAGNOSTIC without
+ * being a disclosure -- "<build>/.../content.tar.gz" still says which stage
+ * failed without saying where the volume is.
+ *
+ * The roots are the same env vars JobWorkspace takes, so adding one means
+ * adding it in both.
  */
 final class ErrorRedactor
 {
@@ -34,12 +34,11 @@ final class ErrorRedactor
     /** @var array<string, string> replacement => root, longest root first */
     private readonly array $roots;
 
-    public function __construct(string $buildTempDir, string $publishedDir, string $failedDir)
+    public function __construct(string $buildTempDir, string $publishedDir)
     {
         $roots = [
             rtrim($buildTempDir, '/') => '<build>',
             rtrim($publishedDir, '/') => '<published>',
-            rtrim($failedDir, '/') => '<failed>',
         ];
 
         // Longest first, so a root nested inside another is replaced by its own

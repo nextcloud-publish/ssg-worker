@@ -18,16 +18,14 @@ use Symfony\Contracts\HttpClient\HttpClientInterface;
  * receiver can dedupe on the pair; that expectation is part of the published
  * contract and is documented in docs/build-pipeline.md.
  *
- * WHICH exception is thrown matters as much as whether one is, and it follows
- * the same split as the rest of the pipeline: \InvalidArgumentException for
- * what no retry could fix (a URL we will not call, an endpoint that rejects
- * us), \RuntimeException for what might work next time (a 503, a dropped
- * connection).
+ * Throws along the same split as the rest of the pipeline:
+ * \InvalidArgumentException for what no retry could fix (a URL we will not
+ * call, an endpoint that rejects us), \RuntimeException for what might work
+ * next time (a 503, a dropped connection).
  *
- * BuildJobHandler currently catches both and acks anyway, because replaying
- * this handler means replaying the whole build. The split is kept here rather
- * than flattened so the policy lives in one visible catch in the handler, and
- * so this class stays portable if the callback ever moves to its own queue.
+ * BuildJobHandler catches both and acks regardless, because replaying it means
+ * replaying the whole build. The split stays here so that policy lives in one
+ * visible catch there rather than being spread across this class.
  */
 final class StatusNotifier
 {
@@ -53,9 +51,7 @@ final class StatusNotifier
     }
 
     /**
-     * $error must already be redacted -- BuildJobHandler does it, because the
-     * operator's log wants the real filesystem paths and the client must not
-     * get them.
+     * $error must already be redacted; BuildJobHandler does it.
      *
      * @throws \InvalidArgumentException if no retry could succeed
      * @throws \RuntimeException         if the call is worth retrying
@@ -157,15 +153,14 @@ final class StatusNotifier
     }
 
     /**
-     * SECURITY. callback_status_url is supplied by the original API caller and
-     * validated nowhere upstream -- BuildController only checks it is present.
-     * This is an outbound POST with a body, so it is a better SSRF primitive
-     * than the inbound download: without the scheme check a job could name
-     * file:// or any other stream wrapper the client supports.
+     * SECURITY. callback_status_url comes from the API caller and is validated
+     * nowhere upstream, and this is an outbound POST with a body -- a better
+     * SSRF primitive than the inbound download. Without the scheme check a job
+     * could name file:// or any other stream wrapper.
      *
-     * Blocking private address ranges is the other half and is applied by
-     * decorating the client with NoPrivateNetworkHttpClient in services.yaml,
-     * so it cannot be bypassed by a redirect or a DNS answer.
+     * Private address ranges are the other half, blocked by decorating the
+     * client with NoPrivateNetworkHttpClient in services.yaml so a redirect or
+     * a DNS answer cannot get around it.
      */
     private function assertCallableUrl(string $url, string $buildId): void
     {

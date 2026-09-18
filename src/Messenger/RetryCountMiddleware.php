@@ -26,24 +26,23 @@ use Symfony\Component\Messenger\Stamp\RedeliveryStamp;
  *
  * Registered in config/packages/messenger.yaml. Custom bus middleware is
  * spliced between the framework's default "before" group and
- * send_message/handle_message, so this runs after the envelope has been
- * decoded and before the handler is called, with no ordering directive needed.
+ * send_message/handle_message, so this runs after the envelope is decoded and
+ * before the handler, with no ordering directive needed.
  *
- * WHERE THE TWO VALUES COME FROM, and how far each can be trusted:
+ * How far each value can be trusted:
  *
  *  - RedeliveryStamp is written by Messenger's own retry republish and is
- *    load-bearing for the transport itself. If it were lost the message would
- *    retry forever, so it is as reliable as the retry mechanism.
+ *    load-bearing for the transport. If it were lost the message would retry
+ *    forever, so it is as reliable as the retry mechanism itself.
  *
  *  - ErrorDetailsStamp is added by AddErrorDetailsStampListener (priority 200)
  *    before SendFailedMessageForRetryListener (priority 100) republishes, so
  *    attempt N's message is on the envelope for delivery N+1. It travels as an
- *    X-Message-Stamp-... HEADER and it holds a FlattenException, which
- *    round-trips only because the container's serializer has ProblemNormalizer
- *    ahead of ObjectNormalizer; the bare Serializer::create() chain cannot
- *    decode it at all. So this is a best-effort courtesy, never a correctness
- *    dependency -- hence the nullable second argument and the handler's
- *    fallback. tests/Messenger/StampRoundTripTest.php pins it.
+ *    X-Message-Stamp-... HEADER holding a FlattenException, and round-trips
+ *    only because the container's serializer has ProblemNormalizer ahead of
+ *    ObjectNormalizer. BEST-EFFORT, never a correctness dependency -- hence the
+ *    nullable second argument and the handler's fallback.
+ *    tests/Messenger/StampRoundTripTest.php pins it.
  */
 final class RetryCountMiddleware implements MiddlewareInterface
 {

@@ -2,7 +2,7 @@
 FROM php:8.5-cli-alpine
 
 # Symfony Messenger's AMQP transport is built on ext-amqp, which links against
-# rabbitmq-c -- not php-amqplib/ext-sockets, which this replaced.
+# rabbitmq-c.
 #
 # PIE, not `pecl install`: PECL is deprecated in favour of PIE (the PHP
 # Installer for Extensions). PIE replaces the download/build/enable

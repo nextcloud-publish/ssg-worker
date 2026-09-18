@@ -4,23 +4,23 @@ declare(strict_types=1);
 
 namespace App\Tests\Job;
 
-use App\Job\BuildPromoter;
-use App\Job\JobLayout;
+use App\Job\JobWorkspace;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * A real temp tree stands in for the volumes.
+ * JobWorkspace::publish(). Kept apart from JobWorkspaceTest because publishing a
+ * site and managing a build's scratch directories are distinct enough that one
+ * file covering both would be harder to read.
  *
- * Most of this file puts all three roots in ONE temp directory, so
- * Filesystem::moveDir() takes its rename() fast path. That is not what the dev
- * stack does -- there the build temp tree is a named volume and the published
- * and quarantine trees are bind mounts, i.e. three separate mount points, so
- * every move between them is a copy. The tests under "the cross-mount reality"
- * at the bottom force that path with /dev/shm; everything above them exercises
- * the logic rather than the transfer.
+ * A real temp tree stands in for the volumes. Most of this file puts both roots
+ * in ONE temp directory, so Filesystem::moveDir() takes its rename() fast path.
+ * A deployment may or may not do that -- the roots are mounted however the
+ * operator needs -- so the tests under "the cross-mount reality" at the bottom
+ * force the copy path with /dev/shm. Everything above them exercises the logic
+ * rather than the transfer.
  */
-final class BuildPromoterTest extends TestCase
+final class JobWorkspacePublishTest extends TestCase
 {
     private const SITE = 'site-42';
     private const BUILD = '16ef078ad37fd894';
@@ -29,23 +29,20 @@ final class BuildPromoterTest extends TestCase
 
     private string $root;
     private ?string $publishedOnOtherMount = null;
-    private JobLayout $layout;
-    private BuildPromoter $promoter;
+    private JobWorkspace $workspace;
     private string $logFile;
     private string|false $previousErrorLog;
 
     protected function setUp(): void
     {
-        $this->root = sys_get_temp_dir() . '/worker-promote-test-' . bin2hex(random_bytes(6));
+        $this->root = sys_get_temp_dir() . '/worker-publish-test-' . bin2hex(random_bytes(6));
 
-        $this->layout = new JobLayout(
+        $this->workspace = new JobWorkspace(
             $this->root . '/build_temp',
             $this->root . '/published',
-            $this->root . '/build_failed',
         );
-        $this->promoter = new BuildPromoter($this->layout);
 
-        $this->logFile = sys_get_temp_dir() . '/worker-promote-log-' . bin2hex(random_bytes(6)) . '.log';
+        $this->logFile = sys_get_temp_dir() . '/worker-publish-log-' . bin2hex(random_bytes(6)) . '.log';
         $this->previousErrorLog = ini_set('error_log', $this->logFile);
     }
 
@@ -63,17 +60,17 @@ final class BuildPromoterTest extends TestCase
 
     /**
      * Builds the tree JobWorkspace::reset() leaves behind, at the same 0750
-     * mode it uses -- which is exactly what promote() has to correct on the way
+     * mode it uses -- which is exactly what publish() has to correct on the way
      * out, or the published site 403s for whatever uid serves it.
      *
      * @param array<string, string> $files relative path => contents
      */
     private function givenBuildOutput(array $files = ['index.html' => '<h1>hello</h1>'], string $build = self::BUILD): string
     {
-        $output = $this->layout->buildOutputDir(self::SITE, $build);
+        $output = $this->workspace->buildOutputDir(self::SITE, $build);
         mkdir($output, 0o750, true);
-        mkdir($this->layout->jobDir(self::SITE, $build) . '/input', 0o750, true);
-        file_put_contents($this->layout->jobDir(self::SITE, $build) . '/input/content.tar.gz', 'archive');
+        mkdir($this->workspace->jobDir(self::SITE, $build) . '/input', 0o750, true);
+        file_put_contents($this->workspace->jobDir(self::SITE, $build) . '/input/content.tar.gz', 'archive');
 
         foreach ($files as $path => $contents) {
             $full = $output . '/' . $path;
@@ -88,36 +85,39 @@ final class BuildPromoterTest extends TestCase
 
     private function publishedSite(): string
     {
-        return $this->layout->publishedSiteDir(self::SLUG);
+        return $this->workspace->publishedSiteDir(self::SLUG);
     }
 
     public function testPublishesTheRenderedSite(): void
     {
         $this->givenBuildOutput();
 
-        $this->promoter->promote(self::SITE, self::BUILD, self::SLUG);
+        $this->workspace->publish(self::SITE, self::BUILD, self::SLUG);
 
         self::assertFileExists($this->publishedSite() . '/index.html');
         self::assertSame('<h1>hello</h1>', file_get_contents($this->publishedSite() . '/index.html'));
     }
 
-    public function testRetiresTheWholeJobTreeIncludingTheDownloadedArchive(): void
+    /**
+     * The output is MOVED, not copied: leaving it behind would mean the next
+     * publish of the same build could ship a stale tree. Retiring what is
+     * left of the job directory is JobWorkspace::clear()'s job, not this one's.
+     */
+    public function testTakesTheBuildOutputWithIt(): void
     {
-        // input/ holds the archive and its fully extracted copy, which is the
-        // bulkiest thing on the volume; nothing downstream reads it.
         $this->givenBuildOutput();
 
-        $this->promoter->promote(self::SITE, self::BUILD, self::SLUG);
+        $this->workspace->publish(self::SITE, self::BUILD, self::SLUG);
 
-        self::assertDirectoryDoesNotExist($this->layout->jobDir(self::SITE, self::BUILD));
-        // The site's parent goes too once it holds no other build.
-        self::assertDirectoryDoesNotExist($this->layout->siteTempDir(self::SITE));
+        self::assertDirectoryDoesNotExist($this->workspace->buildOutputDir(self::SITE, self::BUILD));
+        // The rest of the job tree is untouched -- the handler clears it.
+        self::assertFileExists($this->workspace->jobDir(self::SITE, self::BUILD) . '/input/content.tar.gz');
     }
 
     /**
-     * ssg-worker creates output/ at 0750 as root. Renamed in unchanged, that is
-     * a directory whatever serves the site cannot traverse -- a guaranteed 403
-     * on every page, and invisible to anything but an end-to-end check.
+     * reset() creates output/ at 0750 and the worker runs as root. Renamed in
+     * unchanged, that is a directory whatever serves the site cannot traverse
+     * -- a 403 on every page, invisible to anything but an end-to-end check.
      */
     public function testThePublishedSiteIsTraversableByOtherUsers(): void
     {
@@ -127,7 +127,7 @@ final class BuildPromoterTest extends TestCase
 
         $this->givenBuildOutput();
 
-        $this->promoter->promote(self::SITE, self::BUILD, self::SLUG);
+        $this->workspace->publish(self::SITE, self::BUILD, self::SLUG);
 
         $mode = fileperms($this->publishedSite()) & 0o777;
         self::assertSame(0o755, $mode, sprintf('published site is mode %o, not 0755', $mode));
@@ -144,60 +144,63 @@ final class BuildPromoterTest extends TestCase
             'index.html' => 'first build',
             'removed-later.html' => 'this page goes away',
         ]);
-        $this->promoter->promote(self::SITE, self::BUILD, self::SLUG);
+        $this->workspace->publish(self::SITE, self::BUILD, self::SLUG);
 
         $secondBuild = 'bbbbbbbbbbbbbbbb';
         $this->givenBuildOutput(['index.html' => 'second build'], build: $secondBuild);
-        $this->promoter->promote(self::SITE, $secondBuild, self::SLUG);
+        $this->workspace->publish(self::SITE, $secondBuild, self::SLUG);
 
         self::assertSame('second build', file_get_contents($this->publishedSite() . '/index.html'));
         self::assertFileDoesNotExist($this->publishedSite() . '/removed-later.html');
     }
 
     /**
-     * There is no "already promoted, skip" branch here, and that is a
-     * deliberate difference from the two-service design this came from.
-     *
-     * There, a failed callback replayed the promotion from a separate queue, so
-     * finding the site already published meant "a previous delivery got this
-     * far". Here promote() is called seconds after the render in the same
-     * invocation and the callback can never replay it, so the only thing that
-     * branch could still do is mask a genuinely missing build output. Throwing
-     * makes the retry rebuild instead, which is the correct answer.
+     * The build output is the ONLY thing publish() will publish. It does not
+     * look at the staging or published directories to work out how far a
+     * previous attempt got -- build state is not encoded in the filesystem --
+     * so with no output there is nothing to do but rebuild.
      */
-    public function testPromotingAgainWithNoBuildOutputRebuildsRatherThanSkipping(): void
+    public function testPublishingAgainWithNoBuildOutputRebuildsRatherThanSkipping(): void
     {
         $this->givenBuildOutput();
-        $this->promoter->promote(self::SITE, self::BUILD, self::SLUG);
+        $this->workspace->publish(self::SITE, self::BUILD, self::SLUG);
 
-        // The site is live, but the temp tree is gone -- promote() cleared it.
+        // The site is live, and the output tree moved with it.
         self::assertSame('<h1>hello</h1>', file_get_contents($this->publishedSite() . '/index.html'));
 
         $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('Nothing to promote');
+        $this->expectExceptionMessage('Nothing to publish');
 
-        $this->promoter->promote(self::SITE, self::BUILD, self::SLUG);
+        $this->workspace->publish(self::SITE, self::BUILD, self::SLUG);
     }
 
     /**
-     * A COMPLETE staged release means the expensive cross-mount copy already
-     * finished and the attempt then died -- either between the two renames of
-     * the swap, or after it but before the temp tree was cleared. Either way
-     * the copy must not be redone, and the missing build output must not be
-     * read as "nothing to promote": that would park the message and leave the
-     * site down permanently.
+     * Staging is scratch space, not a record of progress: a tree left there by
+     * a crashed attempt is cleared, never published and never merged into.
+     * Merging would ship a mix of two builds.
      */
-    public function testFinishesASwapThatCrashedBetweenTheTwoRenames(): void
+    public function testAStagedTreeFromACrashedAttemptIsDiscardedNotMerged(): void
     {
-        $staging = $this->layout->stagingDir(self::BUILD);
+        $staging = $this->workspace->stagingDir(self::BUILD);
         mkdir($staging, 0o755, true);
-        file_put_contents($staging . '/index.html', 'staged by a crashed attempt');
+        file_put_contents($staging . '/stale.html', 'from a crashed attempt');
 
-        $this->promoter->promote(self::SITE, self::BUILD, self::SLUG);
+        $this->givenBuildOutput(['index.html' => 'the real build']);
 
-        self::assertFileExists($this->publishedSite() . '/index.html');
-        self::assertSame('staged by a crashed attempt', file_get_contents($this->publishedSite() . '/index.html'));
-        self::assertDirectoryDoesNotExist($staging);
+        $this->workspace->publish(self::SITE, self::BUILD, self::SLUG);
+
+        self::assertSame('the real build', file_get_contents($this->publishedSite() . '/index.html'));
+        self::assertFileDoesNotExist($this->publishedSite() . '/stale.html');
+    }
+
+    /** Staging is emptied on the way out, so it never accumulates. */
+    public function testStagingIsLeftEmptyAfterPublishing(): void
+    {
+        $this->givenBuildOutput();
+
+        $this->workspace->publish(self::SITE, self::BUILD, self::SLUG);
+
+        self::assertDirectoryDoesNotExist($this->workspace->stagingDir(self::BUILD));
     }
 
     /**
@@ -214,18 +217,18 @@ final class BuildPromoterTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('rendered no pages');
 
-        $this->promoter->promote(self::SITE, self::BUILD, self::SLUG);
+        $this->workspace->publish(self::SITE, self::BUILD, self::SLUG);
     }
 
     public function testAnEmptyBuildLeavesTheLiveSiteAlone(): void
     {
         $this->givenBuildOutput(['index.html' => 'the good site']);
-        $this->promoter->promote(self::SITE, self::BUILD, self::SLUG);
+        $this->workspace->publish(self::SITE, self::BUILD, self::SLUG);
 
         $this->givenBuildOutput([], build: 'cccccccccccccccc');
 
         try {
-            $this->promoter->promote(self::SITE, 'cccccccccccccccc', self::SLUG);
+            $this->workspace->publish(self::SITE, 'cccccccccccccccc', self::SLUG);
             self::fail('Expected the empty build to be refused.');
         } catch (\InvalidArgumentException) {
             self::assertSame('the good site', file_get_contents($this->publishedSite() . '/index.html'));
@@ -233,18 +236,17 @@ final class BuildPromoterTest extends TestCase
     }
 
     /**
-     * Nothing to promote and nothing promoted: no filesystem state any retry
-     * could reach, so it must park rather than spend the whole budget.
+     * With no build output there is nothing to publish, and publish() must say
+     * so rather than treat an already-published site as success.
      */
-    public function testParksWhenThereIsNothingToPromoteAndNothingPublished(): void
+    public function testFailsWhenThereIsNothingToPublish(): void
     {
-        // RuntimeException, not InvalidArgumentException: unlike the
-        // two-service design this came from, a retry here re-downloads and
-        // re-renders, so this IS a state a retry can get out of.
+        // RuntimeException, not InvalidArgumentException: a retry re-downloads
+        // and re-renders, so this IS a state a retry can escape.
         $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('Nothing to promote');
+        $this->expectExceptionMessage('Nothing to publish');
 
-        $this->promoter->promote(self::SITE, self::BUILD, self::SLUG);
+        $this->workspace->publish(self::SITE, self::BUILD, self::SLUG);
     }
 
     /**
@@ -266,22 +268,22 @@ final class BuildPromoterTest extends TestCase
     }
 
     #[DataProvider('provideUnsafeIds')]
-    public function testParksOnAnUnsafeStaticSiteId(string $unsafeId): void
+    public function testRefusesAnUnsafeStaticSiteId(string $unsafeId): void
     {
-        // A success for an unsafe id is impossible from a real build --
-        // ssg-worker would have thrown before rendering -- so the message is
-        // forged or corrupt and no retry changes that.
+        // reset() rejects these before a byte is downloaded, so reaching
+        // publish() with one means a forged or corrupt message. No retry
+        // changes that, hence InvalidArgumentException.
         $this->expectException(\InvalidArgumentException::class);
 
-        $this->promoter->promote($unsafeId, self::BUILD, self::SLUG);
+        $this->workspace->publish($unsafeId, self::BUILD, self::SLUG);
     }
 
     #[DataProvider('provideUnsafeIds')]
-    public function testParksOnAnUnsafeBuildId(string $unsafeId): void
+    public function testRefusesAnUnsafeBuildId(string $unsafeId): void
     {
         $this->expectException(\InvalidArgumentException::class);
 
-        $this->promoter->promote(self::SITE, $unsafeId, self::SLUG);
+        $this->workspace->publish(self::SITE, $unsafeId, self::SLUG);
     }
 
     #[DataProvider('provideUnsafeIds')]
@@ -293,14 +295,14 @@ final class BuildPromoterTest extends TestCase
 
         $this->expectException(\InvalidArgumentException::class);
 
-        $this->promoter->promote(self::SITE, self::BUILD, $unsafeSlug);
+        $this->workspace->publish(self::SITE, self::BUILD, $unsafeSlug);
     }
 
     public function testTheSiteIsPublishedUnderItsSlugNotItsStaticSiteId(): void
     {
         $this->givenBuildOutput();
 
-        $this->promoter->promote(self::SITE, self::BUILD, self::SLUG);
+        $this->workspace->publish(self::SITE, self::BUILD, self::SLUG);
 
         self::assertFileExists($this->root . '/published/' . self::SLUG . '/index.html');
         self::assertDirectoryDoesNotExist($this->root . '/published/' . self::SITE);
@@ -316,15 +318,15 @@ final class BuildPromoterTest extends TestCase
     public function testADifferentSiteClaimingTheSameSlugTakesItOver(): void
     {
         $this->givenBuildOutput(['index.html' => 'the first site']);
-        $this->promoter->promote(self::SITE, self::BUILD, self::SLUG);
+        $this->workspace->publish(self::SITE, self::BUILD, self::SLUG);
 
         $otherSite = 'site-99';
         $otherBuild = 'dddddddddddddddd';
-        $output = $this->layout->buildOutputDir($otherSite, $otherBuild);
+        $output = $this->workspace->buildOutputDir($otherSite, $otherBuild);
         mkdir($output, 0o750, true);
         file_put_contents($output . '/index.html', 'the second site');
 
-        $this->promoter->promote($otherSite, $otherBuild, self::SLUG);
+        $this->workspace->publish($otherSite, $otherBuild, self::SLUG);
 
         self::assertSame('the second site', file_get_contents($this->publishedSite() . '/index.html'));
     }
@@ -336,7 +338,7 @@ final class BuildPromoterTest extends TestCase
         $this->givenBuildOutput();
 
         try {
-            $this->promoter->promote(self::SITE, self::BUILD, '../' . basename($escapee));
+            $this->workspace->publish(self::SITE, self::BUILD, '../' . basename($escapee));
             self::fail('Expected a traversal slug to be refused.');
         } catch (\InvalidArgumentException) {
             self::assertDirectoryDoesNotExist($escapee);
@@ -348,7 +350,7 @@ final class BuildPromoterTest extends TestCase
         $escapee = \dirname($this->root) . '/worker-escaped-' . bin2hex(random_bytes(6));
 
         try {
-            $this->promoter->promote('../' . basename($escapee), self::BUILD, self::SLUG);
+            $this->workspace->publish('../' . basename($escapee), self::BUILD, self::SLUG);
             self::fail('Expected a traversal id to be refused.');
         } catch (\InvalidArgumentException) {
             self::assertDirectoryDoesNotExist($escapee);
@@ -361,91 +363,55 @@ final class BuildPromoterTest extends TestCase
      * Everything above shares one temp directory, so rename() succeeds and the
      * copy path never runs. In the real stack the build temp tree is a named
      * volume and the published tree is a bind mount, which is a different mount
-     * point -- so every promotion goes through the copy instead. /dev/shm is
+     * point -- so every publish goes through the copy instead. /dev/shm is
      * the only way to reproduce that here.
      */
-    private function promoterAcrossMounts(): BuildPromoter
+    private function workspaceAcrossMounts(): JobWorkspace
     {
         if (!is_dir('/dev/shm') || !is_writable('/dev/shm')) {
             self::markTestSkipped('no second mount point available to force EXDEV');
         }
 
-        $this->publishedOnOtherMount = '/dev/shm/worker-promote-' . bin2hex(random_bytes(6));
+        $this->publishedOnOtherMount = '/dev/shm/worker-publish-' . bin2hex(random_bytes(6));
         mkdir($this->publishedOnOtherMount, 0o755, true);
 
         if (stat($this->root)['dev'] === stat($this->publishedOnOtherMount)['dev']) {
             self::markTestSkipped('/dev/shm shares a device with the temp dir');
         }
 
-        $this->layout = new JobLayout(
+        $this->workspace = new JobWorkspace(
             $this->root . '/build_temp',
             $this->publishedOnOtherMount,
-            $this->root . '/build_failed',
         );
 
-        return new BuildPromoter($this->layout);
+        return $this->workspace;
     }
 
     public function testPublishesAcrossAMountBoundary(): void
     {
-        $promoter = $this->promoterAcrossMounts();
+        $workspace = $this->workspaceAcrossMounts();
         $this->givenBuildOutput(['index.html' => 'copied across mounts']);
 
-        $promoter->promote(self::SITE, self::BUILD, self::SLUG);
+        $workspace->publish(self::SITE, self::BUILD, self::SLUG);
 
         self::assertSame('copied across mounts', file_get_contents($this->publishedSite() . '/index.html'));
-        self::assertDirectoryDoesNotExist($this->layout->jobDir(self::SITE, self::BUILD));
+        self::assertDirectoryDoesNotExist($this->workspace->buildOutputDir(self::SITE, self::BUILD));
     }
 
     public function testARepublishAcrossAMountBoundaryStillReplaces(): void
     {
-        $promoter = $this->promoterAcrossMounts();
+        $workspace = $this->workspaceAcrossMounts();
 
         $this->givenBuildOutput(['index.html' => 'first', 'gone-later.html' => 'x']);
-        $promoter->promote(self::SITE, self::BUILD, self::SLUG);
+        $workspace->publish(self::SITE, self::BUILD, self::SLUG);
 
         $second = 'bbbbbbbbbbbbbbbb';
         $this->givenBuildOutput(['index.html' => 'second'], build: $second);
-        $promoter->promote(self::SITE, $second, self::SLUG);
+        $workspace->publish(self::SITE, $second, self::SLUG);
 
         self::assertSame('second', file_get_contents($this->publishedSite() . '/index.html'));
         self::assertFileDoesNotExist($this->publishedSite() . '/gone-later.html');
     }
 
-    /**
-     * The copy is not atomic, so a crash mid-copy leaves a partial tree. It
-     * must never reach the live site -- which is why the copy lands on a
-     * scratch name and is renamed to the staging path only once complete.
-     */
-    public function testAHalfCopiedStagingTreeIsNeverPublished(): void
-    {
-        $partial = $this->layout->partialStagingDir(self::BUILD);
-        mkdir($partial, 0o755, true);
-        file_put_contents($partial . '/index.html', 'HALF COPIED, MUST NOT SHIP');
-
-        try {
-            $this->promoter->promote(self::SITE, self::BUILD, self::SLUG);
-            self::fail('Expected the promotion to be refused: there is no build output.');
-        } catch (\RuntimeException) {
-            // The partial tree is not a release, so nothing was published.
-            self::assertDirectoryDoesNotExist($this->publishedSite());
-        }
-    }
-
-    public function testAStalePartialFromACrashedAttemptIsDiscardedNotMerged(): void
-    {
-        // A previous attempt died mid-copy and left a page that is no longer in
-        // the build. Merging into it would publish a mix of two builds.
-        $partial = $this->layout->partialStagingDir(self::BUILD);
-        mkdir($partial, 0o755, true);
-        file_put_contents($partial . '/stale.html', 'from a crashed attempt');
-
-        $this->givenBuildOutput(['index.html' => 'the real build']);
-
-        $this->promoter->promote(self::SITE, self::BUILD, self::SLUG);
-
-        self::assertSame('the real build', file_get_contents($this->publishedSite() . '/index.html'));
-        self::assertFileDoesNotExist($this->publishedSite() . '/stale.html');
-    }
 
 }

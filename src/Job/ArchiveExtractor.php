@@ -5,16 +5,15 @@ declare(strict_types=1);
 namespace App\Job;
 
 /**
- * Unpacks a job's downloaded content archive:
- *  - creates $targetDir if it doesn't exist
- *  - runs the tar command instead of using PharData, avoiding  crashes
- *    because of non-ASCII filenames in Collectives exports
- *  - assumes the archive is a gzipped tar, does not validate that
+ * Unpacks a job's downloaded content archive into $targetDir, creating it if
+ * needed. Shells out to tar rather than using PharData, which crashes on the
+ * non-ASCII filenames Collectives exports contain. The archive is assumed to be
+ * a gzipped tar; nothing validates that before tar is run.
  *
- * Does not guard against a hostile archive: path traversal, symlinks,
- * decompression bombs. These are tolerable today only because the content
- * downloader restricts where an archive can come from (http/https, size-capped)
- * and this class still trusts everything inside one completely.
+ * DOES NOT GUARD AGAINST A HOSTILE ARCHIVE -- path traversal, symlinks and
+ * decompression bombs all pass. That is tolerable only because
+ * ContentDownloader limits where an archive may come from (http/https,
+ * size-capped); everything inside one is trusted completely.
  */
 final class ArchiveExtractor
 {
@@ -22,14 +21,13 @@ final class ArchiveExtractor
     private const EXTRACT_DIR_MODE = 0o750;
 
     /**
-     * How much of tar's output makes it into the exception.
+     * How much of tar's output reaches the exception.
      *
-     * tar prints one line per problem member, so a pathological archive can
-     * produce megabytes. That does not just make a long failure callback: the
-     * message ends up in an ErrorDetailsStamp, which travels as an AMQP HEADER
-     * on the retry republish, and RabbitMQ's default frame_max is 128 KiB. An
-     * unbounded message would make the retry publish itself fail, inside
-     * Worker::ack() where nothing catches it.
+     * tar prints a line per problem member, so a pathological archive produces
+     * megabytes. The message ends up in an ErrorDetailsStamp, which travels as
+     * an AMQP header on the retry republish, and RabbitMQ's default frame_max
+     * is 128 KiB -- an unbounded message would fail the retry publish itself,
+     * inside Worker::ack() where nothing catches it.
      */
     private const MAX_TAR_OUTPUT_LINES = 5;
     private const MAX_TAR_OUTPUT_CHARS = 1000;

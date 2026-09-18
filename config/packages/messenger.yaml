@@ -19,12 +19,12 @@ framework:
 
         transports:
             builds:
-                # Same DSN variable publish uses -- deliberately not Flex's
+                # The same variable the publish API reads, not Flex's
                 # MESSENGER_TRANSPORT_DSN, so the two services cannot drift
-                # apart on which env var actually wires the broker.
+                # apart on which env var wires the broker.
                 dsn: '%env(AMQP_DSN)%'
 
-                # Matches publish's transport: publish serializes with
+                # Matches the publish API's transport, which serializes with
                 # messenger.transport.symfony_serializer (JSON, not PHP
                 # serialize()), so this side has to decode the same way for
                 # the `type` header to resolve to a real class.
@@ -71,24 +71,23 @@ framework:
 
                     exchange:
                         # The empty name is the default exchange: the routing
-                        # key is taken as a queue name and the message is
-                        # delivered straight to it. Two reasons to spell it out
-                        # rather than leave it to the DSN fallback, which is a
-                        # literal "messages" exchange that does not exist:
+                        # key is taken as a queue name and the message goes
+                        # straight to it. Spelled out rather than left to the
+                        # DSN fallback, which is a literal "messages" exchange
+                        # that does not exist, for two reasons:
                         #
                         # 1. It is the safety net for a future `delay: 0`. An
-                        #    undelayed retry is published through this exchange
+                        #    undelayed retry publishes through this exchange
                         #    instead of the delays one, and publishing to a
                         #    missing exchange is a 404 that closes the channel.
                         # 2. The exchange name is interpolated into the delay
-                        #    QUEUE name, so leaving it as "messages" produces
+                        #    QUEUE name, so "messages" would produce
                         #    delay_messages_q.builds_15000_retry in the
                         #    management UI -- a queue named after an exchange
-                        #    nobody ever created.
+                        #    nobody created.
                         #
-                        # It is NOT what makes today's retry path route
-                        # correctly: on a retry the dead-letter exchange is
-                        # hardcoded to '' regardless of this value.
+                        # It is not what routes a delayed retry: that path
+                        # hardcodes the dead-letter exchange to '' regardless.
                         name: ''
                         default_publish_routing_key: q.builds
 
@@ -97,7 +96,7 @@ framework:
                     #
                     # Deliveries carry retry counts 0, 1, 2. BuildJobHandler
                     # builds on 0 and 1; on 2 it does not build at all -- it
-                    # quarantines, POSTs `failed`, and returns normally so the
+                    # deletes the build dir, POSTs `failed`, and returns normally so the
                     # message is acked. So this is the BUILD retry budget, not a
                     # transport-level one: a build that fails for its own
                     # reasons is retried.

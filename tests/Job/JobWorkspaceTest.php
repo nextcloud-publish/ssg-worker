@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Tests\Job;
 
-use App\Job\JobLayout;
 use App\Job\JobWorkspace;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -33,9 +32,7 @@ final class JobWorkspaceTest extends TestCase
     {
         $base = $baseDir ?? $this->baseDir;
 
-        // The published and failed roots are irrelevant here -- reset() only
-        // ever touches the build temp tree -- but JobLayout owns all three.
-        return new JobWorkspace(new JobLayout($base, $base . '/published', $base . '/failed'));
+        return new JobWorkspace($base, $base . '/published');
     }
 
     private function jobDir(): string
@@ -81,10 +78,10 @@ final class JobWorkspaceTest extends TestCase
     }
 
     /**
-     * NOT idempotent, deliberately -- this inverts what this class used to
-     * promise. A retry carries the same build_id, and SsgLab\SiteBuilder never
-     * clears its output directory, so a reused output/ would republish pages
-     * the first attempt wrote and the source no longer has.
+     * NOT idempotent, deliberately. A retry carries the same build_id, and
+     * SsgLab\SiteBuilder never clears its output directory, so a reused output/
+     * would republish pages the first attempt wrote and the source has since
+     * dropped.
      */
     public function testASecondAttemptStartsFromAnEmptyWorkdir(): void
     {
@@ -99,6 +96,66 @@ final class JobWorkspaceTest extends TestCase
         self::assertDirectoryExists($this->jobDir() . '/output');
         self::assertFileDoesNotExist($this->jobDir() . '/input/stale.md');
         self::assertFileDoesNotExist($this->jobDir() . '/output/deleted-page.html');
+    }
+
+    /**
+     * Cleanup happens whichever way the job ended, so it lives here rather than
+     * in publish(). input/ holds the archive and its fully extracted copy,
+     * which is the bulkiest thing on the volume and which nothing reads again.
+     */
+    public function testClearRemovesTheWholeJobTree(): void
+    {
+        $workspace = $this->workspace();
+        $workspace->reset(self::SITE, self::BUILD, self::SLUG);
+        file_put_contents($this->jobDir() . '/input/content.tar.gz', 'archive');
+
+        $workspace->clear(self::SITE, self::BUILD);
+
+        self::assertDirectoryDoesNotExist($this->jobDir());
+        // The site's parent goes too once it holds no other build.
+        self::assertDirectoryDoesNotExist($this->baseDir . '/' . self::SITE);
+    }
+
+    /** Another build of the same site may be in flight. */
+    public function testClearKeepsTheSiteDirectoryWhileAnotherBuildIsThere(): void
+    {
+        $workspace = $this->workspace();
+        $workspace->reset(self::SITE, self::BUILD, self::SLUG);
+        $other = $workspace->reset(self::SITE, 'bbbbbbbbbbbbbbbb', self::SLUG);
+
+        $workspace->clear(self::SITE, self::BUILD);
+
+        self::assertDirectoryDoesNotExist($this->jobDir());
+        self::assertDirectoryExists($other);
+    }
+
+    /** Runs on the failure path, where throwing would cost the client its notice. */
+    public function testClearDoesNotThrowWhenThereIsNothingToRemove(): void
+    {
+        $this->workspace()->clear(self::SITE, self::BUILD);
+
+        $this->expectNotToPerformAssertions();
+    }
+
+    /**
+     * An unsafe id arrives here routinely -- it is one of the things a build is
+     * failed FOR. Nothing was created for it, and the id cannot be turned into
+     * a path safely, so the only correct move is to do nothing at all.
+     */
+    #[DataProvider('provideUnsafeIds')]
+    public function testClearRefusesToActOnAnUnsafeId(string $unsafeId): void
+    {
+        $escapee = dirname($this->baseDir) . '/ssg-worker-clear-escaped-' . bin2hex(random_bytes(6));
+        mkdir($escapee, 0o750, true);
+
+        try {
+            $this->workspace()->clear($unsafeId, self::BUILD);
+            $this->workspace()->clear(self::SITE, $unsafeId);
+
+            self::assertDirectoryExists($escapee);
+        } finally {
+            exec('rm -rf ' . escapeshellarg($escapee));
+        }
     }
 
     public function testAcceptsAUuidStaticSiteId(): void
@@ -128,7 +185,7 @@ final class JobWorkspaceTest extends TestCase
             'empty' => [''],
             'too long' => [str_repeat('a', 129)],
             // Not a traversal, but the reason the slug cannot double as the
-            // site title any more: a human-readable heading has spaces.
+            // site title: a human-readable heading has spaces.
             'contains a space' => ['My Team Handbook'],
         ];
     }
@@ -136,7 +193,7 @@ final class JobWorkspaceTest extends TestCase
     #[DataProvider('provideUnsafeIds')]
     public function testRejectsAnUnsafeStaticSiteId(string $unsafeId): void
     {
-        self::assertFalse(JobLayout::isValidId($unsafeId));
+        self::assertFalse(JobWorkspace::isValidId($unsafeId));
 
         // Not RuntimeException: a bad id is the caller's mistake, not the
         // environment's.
@@ -225,5 +282,99 @@ final class JobWorkspaceTest extends TestCase
         } finally {
             unlink($blocked);
         }
+    }
+
+    // --- path arithmetic --------------------------------------------------
+    //
+    // Fixed roots rather than the temp dir: these assert the SHAPE of the paths,
+    // which is a cross-repo contract (publish writes nothing here, but the
+    // published tree is what an operator mounts and nginx serves), so the
+    // literal strings are the point.
+
+    private function paths(): JobWorkspace
+    {
+        return new JobWorkspace('/opt/ssg/build_temp', '/opt/ssg/published');
+    }
+
+    public function testTheJobTreeIsKeyedOnSiteThenBuild(): void
+    {
+        $paths = $this->paths();
+
+        self::assertSame('/opt/ssg/build_temp/site-42', $paths->siteTempDir(self::SITE));
+        self::assertSame('/opt/ssg/build_temp/site-42/16ef078ad37fd894', $paths->jobDir(self::SITE, self::BUILD));
+        self::assertSame(
+            '/opt/ssg/build_temp/site-42/16ef078ad37fd894/input',
+            $paths->buildInputDir(self::SITE, self::BUILD),
+        );
+        self::assertSame(
+            '/opt/ssg/build_temp/site-42/16ef078ad37fd894/output',
+            $paths->buildOutputDir(self::SITE, self::BUILD),
+        );
+    }
+
+    /** The roots are set by hand in compose, so a trailing slash is likely. */
+    public function testNormalisesATrailingSlashOnTheRoots(): void
+    {
+        $paths = new JobWorkspace('/opt/ssg/build_temp/', '/opt/ssg/published/');
+
+        self::assertSame('/opt/ssg/build_temp/site-42', $paths->siteTempDir(self::SITE));
+        self::assertSame('/opt/ssg/published/demo-site', $paths->publishedSiteDir(self::SLUG));
+    }
+
+    /** The published tree is keyed on the slug; the site id never appears in it. */
+    public function testThePublishedSiteIsKeyedOnTheSlug(): void
+    {
+        self::assertSame('/opt/ssg/published/demo-site', $this->paths()->publishedSiteDir(self::SLUG));
+    }
+
+    /**
+     * Staging lives INSIDE the published tree so the swap is a same-mount
+     * rename however the two roots are mounted, and starts with a dot so a
+     * build still being copied stays unreachable behind nginx's
+     * `location ~ /\.` rule.
+     */
+    public function testStagingLivesInsideThePublishedTreeAndIsHidden(): void
+    {
+        $paths = $this->paths();
+
+        self::assertSame('/opt/ssg/published/.staging', $paths->stagingRoot());
+        self::assertStringStartsWith($paths->stagingRoot() . '/', $paths->stagingDir(self::BUILD));
+        self::assertStringContainsString('/.', $paths->stagingDir(self::BUILD));
+    }
+
+    /** Keyed on build_id, so two builds staging at once cannot collide. */
+    public function testStagingIsKeyedOnBuild(): void
+    {
+        $paths = $this->paths();
+
+        self::assertSame('/opt/ssg/published/.staging/16ef078ad37fd894', $paths->stagingDir(self::BUILD));
+        self::assertNotSame($paths->stagingDir(self::BUILD), $paths->stagingDir('bbbbbbbbbbbbbbbb'));
+    }
+
+    // --- the allow-list ---------------------------------------------------
+    //
+    // The unsafe cases are exercised through reset() and clear() above, which
+    // is where they matter. These cover the other direction: that the values
+    // publish actually sends are accepted.
+
+    /**
+     * @return array<string, array{string}>
+     */
+    public static function provideSafeIds(): array
+    {
+        return [
+            'simple' => ['demo'],
+            'hyphenated' => ['demo-site'],
+            'underscored' => ['some_collective'],
+            'uuid' => ['11f5b798-6f34-4951-ad8b-bfd623ded5c2'],
+            'hex build id' => ['16ef078ad37fd894'],
+            'at the length limit' => [str_repeat('a', 128)],
+        ];
+    }
+
+    #[DataProvider('provideSafeIds')]
+    public function testAcceptsASafeId(string $safe): void
+    {
+        self::assertTrue(JobWorkspace::isValidId($safe));
     }
 }

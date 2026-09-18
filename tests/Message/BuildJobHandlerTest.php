@@ -7,10 +7,7 @@ namespace App\Tests\Message;
 use App\Callback\ErrorRedactor;
 use App\Callback\StatusNotifier;
 use App\Job\ArchiveExtractor;
-use App\Job\BuildPromoter;
-use App\Job\BuildQuarantine;
 use App\Job\ContentDownloader;
-use App\Job\JobLayout;
 use App\Job\JobWorkspace;
 use App\Job\SiteRenderer;
 use App\Message\BuildJob;
@@ -114,9 +111,9 @@ final class BuildJobHandlerTest extends TestCase
         return $bytes;
     }
 
-    private function layout(): JobLayout
+    private function workspace(): JobWorkspace
     {
-        return new JobLayout($this->buildTemp(), $this->publishedRoot(), $this->failedRoot());
+        return new JobWorkspace($this->buildTemp(), $this->publishedRoot());
     }
 
     private function buildTemp(): string
@@ -129,25 +126,17 @@ final class BuildJobHandlerTest extends TestCase
         return $this->root . '/published';
     }
 
-    private function failedRoot(): string
-    {
-        return $this->root . '/build_failed';
-    }
-
     private function handler(?MockHttpClient $contentClient = null): BuildJobHandler
     {
-        $layout = $this->layout();
+        $workspace = $this->workspace();
 
         return new BuildJobHandler(
             new ContentDownloader($contentClient ?? $this->client, maxMegabytes: 1),
             new ArchiveExtractor(),
             new SiteRenderer(),
-            new JobWorkspace($layout),
-            $layout,
-            new BuildPromoter($layout),
-            new BuildQuarantine($layout),
+            $workspace,
             new StatusNotifier($this->callbackClient),
-            new ErrorRedactor($this->buildTemp(), $this->publishedRoot(), $this->failedRoot()),
+            new ErrorRedactor($this->buildTemp(), $this->publishedRoot()),
             maxRetries: self::FINAL_DELIVERY,
         );
     }
@@ -328,7 +317,11 @@ final class BuildJobHandlerTest extends TestCase
         }
 
         self::assertSame([], $this->callbacks, 'a retryable failure must not report an outcome');
-        self::assertDirectoryDoesNotExist($this->failedRoot() . '/' . self::BUILD_ID);
+
+        // The workdir is left alone: the next attempt's reset() wipes it, and
+        // clearing it here would throw away the evidence while the build is
+        // still in flight.
+        self::assertDirectoryExists($this->jobDir());
     }
 
     /**
@@ -349,16 +342,43 @@ final class BuildJobHandlerTest extends TestCase
         self::assertSame('tar: unexpected EOF in archive', $body['error']);
     }
 
-    public function testTheFinalDeliveryQuarantinesWhatThePreviousAttemptLeft(): void
+    /**
+     * A failed build keeps nothing: the wreckage is deleted, not moved aside.
+     * The error in the callback and the log line are the whole record.
+     */
+    public function testTheFinalDeliveryDeletesWhatThePreviousAttemptLeft(): void
     {
-        // Attempt 2's wreckage: a job tree that was never promoted.
+        // Attempt 2's wreckage: a job tree that was never published.
         mkdir($this->jobDir() . '/input', 0o750, true);
         file_put_contents($this->jobDir() . '/input/content.tar.gz', 'half a download');
 
         ($this->handler())($this->job(), self::FINAL_DELIVERY, 'Download failed');
 
-        self::assertFileExists($this->failedRoot() . '/' . self::BUILD_ID . '/input/content.tar.gz');
         self::assertDirectoryDoesNotExist($this->jobDir());
+        // The site's parent goes too once it holds no other build.
+        self::assertDirectoryDoesNotExist($this->buildTemp() . '/' . self::SITE_ID);
+        self::assertSame('failed', $this->onlyCallback()['status']);
+    }
+
+    /**
+     * An unsafe id means no directory was ever created, and the ids cannot be
+     * turned into a path safely. Cleanup must not be attempted with them, and
+     * must not stop the client being told.
+     */
+    public function testATerminalFailureWithAnUnsafeIdStillReportsAndDeletesNothing(): void
+    {
+        $escapee = \dirname($this->root) . '/worker-clear-escaped-' . bin2hex(random_bytes(6));
+        mkdir($escapee, 0o750, true);
+        file_put_contents($escapee . '/keep.md', 'must survive');
+
+        try {
+            ($this->handler())($this->job(staticSiteId: '../' . basename($escapee)));
+
+            self::assertFileExists($escapee . '/keep.md');
+            self::assertSame('failed', $this->onlyCallback()['status']);
+        } finally {
+            exec('rm -rf ' . escapeshellarg($escapee));
+        }
     }
 
     /**
@@ -472,7 +492,7 @@ final class BuildJobHandlerTest extends TestCase
 
     /**
      * Letting the notifier's exception out would replay the whole handler --
-     * download, extract, render, promote -- and spend the BUILD retry budget on
+     * download, extract, render, publish -- and spend the BUILD retry budget on
      * an HTTP problem, so a slow client endpoint would be reported as a failed
      * build. The site is already live; the log is the record.
      */

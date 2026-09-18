@@ -9,12 +9,12 @@ enqueues onto).
 For each job it downloads the content archive, extracts it, renders the pages,
 **publishes the result to `PUBLISHED_DIR/<slug>/`** and **reports the outcome to the
 job's `callback_status_url`**. A build that fails for a transient reason is retried once;
-one that fails for good is quarantined to `FAILED_DIR/<build_id>/` and reported as
+one that fails for good has its build directory deleted and is reported as
 `failed`. Progress and failures are both logged via PHP's `error_log()` and captured by
 `docker logs`.
 
 [docs/build-pipeline.md](docs/build-pipeline.md) is the design of record — the directory
-contract, the atomic swap, the retry semantics, the callback contract and what the test
+contract, staging and the swap, the retry semantics, the callback contract and what the test
 suite cannot reach. [docs/roadmap.md](docs/roadmap.md) records the known limitations and
 what a database would close.
 
@@ -39,7 +39,7 @@ rejects it first. Of the fields it does read:
 
 | Field                  | Used for                                                             |
 | ---------------------- | -------------------------------------------------------------------- |
-| `build_id`             | names the job's folder and the quarantine folder; traces the build    |
+| `build_id`             | names the job's folder; traces the build across services              |
 | `static_site_id`       | names the job's folder under `JOB_STORAGE_DIR`                       |
 | `slug`                 | names the published site under `PUBLISHED_DIR`                       |
 | `title`                | titles the rendered site, as the header link on every page           |
@@ -65,7 +65,7 @@ collective.
   tree is cleared, and `success` is POSTed to `callback_status_url`.
 - **Transient failure** → rethrown, and the transport redelivers after 15s.
   `retry_strategy.max_retries: 2` gives **two build attempts**; the third delivery does
-  not build, it quarantines to `FAILED_DIR/<build_id>/` and POSTs `failed`.
+  not build, it deletes the build directory and POSTs `failed`.
 - **Permanent failure** (an unsafe id or slug, a URL we will not fetch, an archive with
   no markdown) → reported `failed` on the first delivery, never retried.
 
@@ -97,7 +97,6 @@ treat a terminal status as final. The payload and the retry semantics are specif
 | `AMQP_HEARTBEAT`  | no       | `10`    | AMQP heartbeat interval in seconds; must match the broker's setting                                  |
 | `JOB_STORAGE_DIR` | yes      | none    | Build scratch root; the worker creates `<static_site_id>/<build_id>/input` + `/output` under it       |
 | `PUBLISHED_DIR`   | yes      | none    | Where finished sites are published, as `<slug>/`. An external nginx serves this                       |
-| `FAILED_DIR`      | yes      | none    | Where a terminally failed build's tree is quarantined, as `<build_id>/`                              |
 | `MAX_DOWNLOAD_MB` | yes      | none    | Ceiling on a single content download, in megabytes (e.g. `256`); minimum `1`                         |
 
 Everything except `AMQP_HEARTBEAT` has no fallback — an unset variable is a broken
@@ -105,24 +104,20 @@ deployment, and guessing a value would hide a misconfiguration rather than surfa
 A wrong `PUBLISHED_DIR` in particular means builds succeed and are published where
 nothing serves them.
 
-Two things about the layout matter beyond naming a path:
+One thing about the layout matters beyond naming a path:
 
-- **`FAILED_DIR` belongs on the same mount as `JOB_STORAGE_DIR`.** Quarantining copies a
-  failed build's whole tree — the archive and its fully extracted duplicate — and the
-  message stays unacked for the entire copy. On one mount it is an instant rename.
 - **`PUBLISHED_DIR` must be readable by whatever uid serves it.** The worker runs as root
-  and creates `output/` at `0750`; the promoter widens the published root to `0755` for
+  and creates `output/` at `0750`; `publish()` widens the published root to `0755` for
   exactly this reason, and it is the one thing no unit test can verify.
 
 ## Local development
 
 ```bash
 composer install
-mkdir -p /tmp/ssg/{build_temp,published,build_failed}
+mkdir -p /tmp/ssg/{build_temp,published}
 AMQP_DSN="amqp://app:secret@localhost:5672/%2f" \
 JOB_STORAGE_DIR=/tmp/ssg/build_temp \
 PUBLISHED_DIR=/tmp/ssg/published \
-FAILED_DIR=/tmp/ssg/build_failed \
 MAX_DOWNLOAD_MB=256 \
 php bin/console messenger:consume builds -vv
 ```
@@ -164,7 +159,7 @@ php bin/phpunit
 Real collaborators rather than mocks throughout (the classes are `final`, so PHP could
 not mock them anyway): `MockHttpClient` replaces the network and a temp directory
 replaces the volumes, so status codes, oversized bodies, broken transfers, traversal
-attempts, the atomic swap, cross-mount copies, quarantining, the retry gate and error
+attempts, staging and the swap, cross-mount copies, cleanup, the retry gate and error
 redaction all run offline.
 
 **Passing tests say nothing about whether `messenger:consume builds` survives its first
@@ -182,13 +177,11 @@ config/
   packages/property_info.yaml constructor extractor, so BuildJob can be built
   services.yaml              the three storage roots, %build.max_retries%, SSRF-guarded http client
 src/
-  Job/                       JobLayout: every path, and the allow-list guarding them
-                             JobWorkspace: creates <static_site_id>/<build_id>/input + /output, wiping any previous attempt
+  Job/                       JobWorkspace: every path, the allow-list guarding them, and a build's
+                             lifecycle -- reset() before, publish() on success, clear() at the end
                              ContentDownloader: streams content_download_url to disk, scheme-checked and size-capped
                              ArchiveExtractor: unpacks the archive into input/content_unarchived
                              SiteRenderer: renders the extracted pages into output/
-                             BuildPromoter: swaps output/ into PUBLISHED_DIR/<slug> atomically, clears the build tree
-                             BuildQuarantine: moves a failed build to FAILED_DIR/<build_id>
                              Filesystem: the primitives, each failing with the OS's own reason
   Callback/                  StatusNotifier: POSTs the outcome to callback_status_url
                              ErrorRedactor: keeps volume paths out of what the client is sent
