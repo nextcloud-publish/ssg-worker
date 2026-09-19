@@ -1,22 +1,6 @@
 # see https://symfony.com/doc/current/messenger.html
 framework:
     messenger:
-        buses:
-            messenger.bus.default:
-                middleware:
-                    # Custom middleware is spliced between the framework's
-                    # default "before" group (which ends with
-                    # reject_redelivered_message_middleware) and its "after"
-                    # group (send_message, handle_message), so no ordering
-                    # directive is needed or possible.
-                    #
-                    # It has to run before handle_message: a handler is given
-                    # only the message, never the envelope, so the retry count
-                    # and the previous attempt's error have to be lifted off the
-                    # envelope and attached as extra handler arguments here, or
-                    # BuildJobHandler cannot see them at all.
-                    - App\Messenger\RetryCountMiddleware
-
         transports:
             builds:
                 # The same variable the publish API reads, not Flex's
@@ -92,27 +76,23 @@ framework:
                         default_publish_routing_key: q.builds
 
                 retry_strategy:
-                    # TWO BUILD ATTEMPTS, then a reported failure.
+                    # ONE RETRY, so TWO BUILD ATTEMPTS in total.
                     #
-                    # Deliveries carry retry counts 0, 1, 2. BuildJobHandler
-                    # builds on 0 and 1; on 2 it does not build at all -- it
-                    # deletes the build dir, POSTs `failed`, and returns normally so the
-                    # message is acked. So this is the BUILD retry budget, not a
-                    # transport-level one: a build that fails for its own
-                    # reasons is retried.
-                    #
-                    # Keep in step with %build.max_retries%, which is what
-                    # BuildJobHandler reads. They are the same parameter for
-                    # that reason.
+                    # isRetryable() is `$retries < $maxRetries`, so the second
+                    # delivery's failure leaves willRetry() false and
+                    # BuildFailureHandler tells the client. This is the BUILD
+                    # retry budget, not a transport-level one: a build that
+                    # fails for its own reasons is retried once.
                     #
                     # The budget is also spent by things that are NOT build
                     # failures: a consumer_timeout requeue comes back with the
-                    # AMQP redelivered flag set, RejectRedeliveredMessageMiddleware
-                    # throws before the handler runs, and that counts. A site
-                    # that legitimately renders for longer than consumer_timeout
-                    # therefore burns both attempts and is reported as failed
-                    # without ever finishing. See docs/roadmap.md.
-                    max_retries: '%build.max_retries%'
+                    # AMQP redelivered flag set and
+                    # RejectRedeliveredMessageMiddleware throws before the
+                    # handler runs. That still reaches BuildFailureHandler, so
+                    # the client is told -- but a site that renders for longer
+                    # than consumer_timeout is reported failed without ever
+                    # finishing. See docs/roadmap.md.
+                    max_retries: 1
 
                     # REQUIRES the `delays` direct exchange to exist in
                     # publish/docker/rabbitmq-config/definitions.json. With
@@ -124,21 +104,17 @@ framework:
                     # catch this -- the in-memory transport discards every
                     # option here.
                     #
-                    # Only two backoffs can ever fire: 15s after the first
-                    # failure, 60s after the second. Short first, so a transient
-                    # blip (a 503 from the content API, a moment of disk
-                    # pressure) is retried while the client is still watching;
-                    # longer second, so a flapping upstream gets a real window
-                    # instead of a second identical failure 15s later. Worst
-                    # case from first failure to `failed` callback: ~75s plus
-                    # the build durations.
+                    # One backoff fires, 15s after the first failure: long
+                    # enough for a transient blip (a 503 from the content API, a
+                    # moment of disk pressure) to pass, short enough that the
+                    # client is still watching. Worst case from first failure to
+                    # `failed` callback is ~15s plus the second build.
                     delay: 15000
-                    multiplier: 4
 
-                    # Equal to the last delay this budget can produce, so it
-                    # never binds today. It is here so that raising max_retries
-                    # later cannot silently start producing multi-minute waits
-                    # without someone revisiting this block.
+                    # Both inert with a single retry. They are here so raising
+                    # max_retries cannot silently start producing multi-minute
+                    # waits without someone revisiting this block.
+                    multiplier: 4
                     max_delay: 60000
 
                     # 0, not the framework default of 0.1. The jittered value is

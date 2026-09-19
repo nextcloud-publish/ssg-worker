@@ -42,7 +42,7 @@ final class JobWorkspaceTest extends TestCase
 
     public function testCreatesInputAndOutputDirectories(): void
     {
-        $jobDir = $this->workspace()->reset(self::SITE, self::BUILD, self::SLUG);
+        $jobDir = $this->workspace()->reset(self::SITE, self::BUILD);
 
         self::assertDirectoryExists($this->jobDir() . '/input');
         self::assertDirectoryExists($this->jobDir() . '/output');
@@ -60,8 +60,8 @@ final class JobWorkspaceTest extends TestCase
     {
         $workspace = $this->workspace();
 
-        $first = $workspace->reset(self::SITE, self::BUILD, self::SLUG);
-        $second = $workspace->reset(self::SITE, 'bbbbbbbbbbbbbbbb', self::SLUG);
+        $first = $workspace->reset(self::SITE, self::BUILD);
+        $second = $workspace->reset(self::SITE, 'bbbbbbbbbbbbbbbb');
 
         self::assertNotSame($first, $second);
         self::assertDirectoryExists($first . '/output');
@@ -71,7 +71,7 @@ final class JobWorkspaceTest extends TestCase
     public function testCreatesDirectoriesThatAreWritable(): void
     {
         // Both get written into, so present is not enough.
-        $this->workspace()->reset(self::SITE, self::BUILD, self::SLUG);
+        $this->workspace()->reset(self::SITE, self::BUILD);
 
         self::assertDirectoryIsWritable($this->jobDir() . '/input');
         self::assertDirectoryIsWritable($this->jobDir() . '/output');
@@ -86,11 +86,11 @@ final class JobWorkspaceTest extends TestCase
     public function testASecondAttemptStartsFromAnEmptyWorkdir(): void
     {
         $workspace = $this->workspace();
-        $workspace->reset(self::SITE, self::BUILD, self::SLUG);
+        $workspace->reset(self::SITE, self::BUILD);
         file_put_contents($this->jobDir() . '/input/stale.md', '# from the first attempt');
         file_put_contents($this->jobDir() . '/output/deleted-page.html', 'no longer in the source');
 
-        $workspace->reset(self::SITE, self::BUILD, self::SLUG);
+        $workspace->reset(self::SITE, self::BUILD);
 
         self::assertDirectoryExists($this->jobDir() . '/input');
         self::assertDirectoryExists($this->jobDir() . '/output');
@@ -106,7 +106,7 @@ final class JobWorkspaceTest extends TestCase
     public function testClearRemovesTheWholeJobTree(): void
     {
         $workspace = $this->workspace();
-        $workspace->reset(self::SITE, self::BUILD, self::SLUG);
+        $workspace->reset(self::SITE, self::BUILD);
         file_put_contents($this->jobDir() . '/input/content.tar.gz', 'archive');
 
         $workspace->clear(self::SITE, self::BUILD);
@@ -120,8 +120,8 @@ final class JobWorkspaceTest extends TestCase
     public function testClearKeepsTheSiteDirectoryWhileAnotherBuildIsThere(): void
     {
         $workspace = $this->workspace();
-        $workspace->reset(self::SITE, self::BUILD, self::SLUG);
-        $other = $workspace->reset(self::SITE, 'bbbbbbbbbbbbbbbb', self::SLUG);
+        $workspace->reset(self::SITE, self::BUILD);
+        $other = $workspace->reset(self::SITE, 'bbbbbbbbbbbbbbbb');
 
         $workspace->clear(self::SITE, self::BUILD);
 
@@ -138,8 +138,8 @@ final class JobWorkspaceTest extends TestCase
     }
 
     /**
-     * An unsafe id arrives here routinely -- it is one of the things a build is
-     * failed FOR. Nothing was created for it, and the id cannot be turned into
+     * An unsafe id arrives here routinely -- it's one of the things a build is
+     * failed for. Nothing was created for it, and the id cannot be turned into
      * a path safely, so the only correct move is to do nothing at all.
      */
     #[DataProvider('provideUnsafeIds')]
@@ -164,7 +164,7 @@ final class JobWorkspaceTest extends TestCase
         // UUID so it accepts whatever publish accepts.
         $uuid = '11f5b798-6f34-4951-ad8b-bfd623ded5c2';
 
-        $this->workspace()->reset($uuid, self::BUILD, self::SLUG);
+        $this->workspace()->reset($uuid, self::BUILD);
 
         self::assertDirectoryExists($this->baseDir . '/' . $uuid . '/' . self::BUILD . '/input');
     }
@@ -190,57 +190,52 @@ final class JobWorkspaceTest extends TestCase
         ];
     }
 
+    /**
+     * One check, and these are it. reset() and publish() do not re-validate --
+     * they take the ids as already vetted -- so this is the whole of what
+     * stands between a queue payload and the filesystem.
+     */
     #[DataProvider('provideUnsafeIds')]
-    public function testRejectsAnUnsafeStaticSiteId(string $unsafeId): void
+    public function testAssertSafeJobRejectsAnUnsafeStaticSiteId(string $unsafeId): void
     {
         self::assertFalse(JobWorkspace::isValidId($unsafeId));
 
         // Not RuntimeException: a bad id is the caller's mistake, not the
         // environment's.
         $this->expectException(\InvalidArgumentException::class);
-        $this->workspace()->reset($unsafeId, self::BUILD, self::SLUG);
+        $this->expectExceptionMessage('static_site_id');
+
+        JobWorkspace::assertSafeJob($unsafeId, self::BUILD, self::SLUG);
     }
 
     #[DataProvider('provideUnsafeIds')]
-    public function testRejectsAnUnsafeBuildId(string $unsafeId): void
+    public function testAssertSafeJobRejectsAnUnsafeBuildId(string $unsafeId): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->workspace()->reset(self::SITE, $unsafeId, self::SLUG);
+        $this->expectExceptionMessage('build_id');
+
+        JobWorkspace::assertSafeJob(self::SITE, $unsafeId, self::SLUG);
     }
 
     /**
-     * The slug is validated here even though nothing in reset() uses it: it
-     * names the published directory, and finding out it is unusable after a
-     * five-minute render wastes the attempt.
+     * The slug is checked with the ids even though only publish() uses it:
+     * finding out after a five-minute render that it cannot name a directory
+     * wastes the attempt and delays the client's answer for nothing.
      */
     #[DataProvider('provideUnsafeIds')]
-    public function testRejectsAnUnsafeSlug(string $unsafeSlug): void
+    public function testAssertSafeJobRejectsAnUnsafeSlug(string $unsafeSlug): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->workspace()->reset(self::SITE, self::BUILD, $unsafeSlug);
+        $this->expectExceptionMessage('slug');
+
+        JobWorkspace::assertSafeJob(self::SITE, self::BUILD, $unsafeSlug);
     }
 
-    public function testATraversalIdCreatesNothingOutsideTheBaseDirectory(): void
+    public function testAssertSafeJobAcceptsAWholeValidJob(): void
     {
-        $escapee = dirname($this->baseDir) . '/ssg-worker-escaped-' . bin2hex(random_bytes(6));
+        JobWorkspace::assertSafeJob(self::SITE, self::BUILD, self::SLUG);
 
-        try {
-            $this->workspace()->reset('../' . basename($escapee), self::BUILD, self::SLUG);
-            self::fail('Expected an InvalidArgumentException for a traversal id.');
-        } catch (\InvalidArgumentException) {
-            self::assertDirectoryDoesNotExist($escapee);
-        }
-    }
-
-    public function testAnUnsafeSlugIsRejectedBeforeAnythingIsCreated(): void
-    {
-        try {
-            $this->workspace()->reset(self::SITE, self::BUILD, '../etc');
-            self::fail('Expected an InvalidArgumentException for a traversal slug.');
-        } catch (\InvalidArgumentException) {
-            // Nothing is created, so a failed build leaves no debris behind.
-            self::assertDirectoryDoesNotExist($this->jobDir());
-        }
+        $this->expectNotToPerformAssertions();
     }
 
     public function testThrowsWhenTheBaseDirectoryCannotBeCreated(): void
@@ -250,7 +245,7 @@ final class JobWorkspaceTest extends TestCase
         file_put_contents($blocked, 'not a directory');
 
         try {
-            $this->workspace($blocked)->reset(self::SITE, self::BUILD, self::SLUG);
+            $this->workspace($blocked)->reset(self::SITE, self::BUILD);
             self::fail('Expected a RuntimeException for an uncreatable directory.');
         } catch (\RuntimeException $e) {
             // Without the reason, a full disk, an unmounted volume and a
@@ -274,7 +269,7 @@ final class JobWorkspaceTest extends TestCase
         file_put_contents($blocked, 'not a directory');
 
         try {
-            $this->workspace($blocked)->reset(self::SITE, self::BUILD, self::SLUG);
+            $this->workspace($blocked)->reset(self::SITE, self::BUILD);
             self::fail('Expected a RuntimeException for an uncreatable directory.');
         } catch (\RuntimeException $e) {
             self::assertStringContainsString('Not a directory', $e->getMessage());

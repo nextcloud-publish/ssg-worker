@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Callback;
+namespace App\Job;
 
 use Symfony\Contracts\HttpClient\Exception\ExceptionInterface as HttpClientException;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
@@ -11,19 +11,18 @@ use Symfony\Contracts\HttpClient\HttpClientInterface;
  * POSTs a build's terminal outcome to the callback_status_url the original
  * request supplied.
  *
- * DELIVERY IS AT-LEAST-ONCE and cannot be made otherwise. Messenger acks only
+ * Delivery is at-least-once and can't be made otherwise: Messenger acks only
  * after the handler returns, so a transport retry, a consumer_timeout requeue,
  * or the worker being killed between the POST and the ack all deliver the same
  * callback again. The payload carries build_id and a terminal status so the
- * receiver can dedupe on the pair; that expectation is part of the published
- * contract and is documented in docs/build-pipeline.md.
+ * receiver can dedupe on the pair; that's documented in docs/build-pipeline.md.
  *
  * Throws along the same split as the rest of the pipeline:
- * \InvalidArgumentException for what no retry could fix (a URL we will not
- * call, an endpoint that rejects us), \RuntimeException for what might work
- * next time (a 503, a dropped connection).
+ * \InvalidArgumentException for what no retry could fix (a URL we won't call,
+ * an endpoint that rejects us), \RuntimeException for what might work next
+ * time (a 503, a dropped connection).
  *
- * BuildJobHandler catches both and acks regardless, because replaying it means
+ * BuildJobHandler catches both and acks regardless, since replaying it means
  * replaying the whole build. The split stays here so that policy lives in one
  * visible catch there rather than being spread across this class.
  */
@@ -36,7 +35,7 @@ final class StatusNotifier
     private const ALLOWED_SCHEMES = ['http', 'https'];
 
     /**
-     * 4xx codes that DO justify a retry, against the general rule that 4xx is
+     * 4xx codes that justify a retry, against the general rule that 4xx is
      * the caller's fault and permanent: 408 is the server asking us to try
      * again, 429 is it asking us to slow down.
      */
@@ -153,14 +152,14 @@ final class StatusNotifier
     }
 
     /**
-     * SECURITY. callback_status_url comes from the API caller and is validated
-     * nowhere upstream, and this is an outbound POST with a body -- a better
-     * SSRF primitive than the inbound download. Without the scheme check a job
+     * callback_status_url comes from the API caller and is validated nowhere
+     * upstream, and this is an outbound POST with a body -- a better SSRF
+     * primitive than the inbound download. Without the scheme check a job
      * could name file:// or any other stream wrapper.
      *
      * Private address ranges are the other half, blocked by decorating the
      * client with NoPrivateNetworkHttpClient in services.yaml so a redirect or
-     * a DNS answer cannot get around it.
+     * a DNS answer can't get around it.
      */
     private function assertCallableUrl(string $url, string $buildId): void
     {

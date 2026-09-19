@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace App\Tests\Callback;
+namespace App\Tests\Job;
 
-use App\Callback\StatusNotifier;
+use App\Job\StatusNotifier;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpClient\MockHttpClient;

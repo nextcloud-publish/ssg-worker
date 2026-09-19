@@ -6,12 +6,9 @@ namespace App\Job;
 
 /**
  * The filesystem primitives the build pipeline needs, each failing with the
- * operating system's own reason rather than a generic message.
- *
- * That is the whole point of wrapping them: a full disk, an unmounted volume, a
- * permission problem and a typo'd environment variable otherwise all present as
- * "rename failed", and what reaches the client is a failure callback that says
- * nothing useful.
+ * operating system's own reason instead of a generic message -- a full disk,
+ * an unmounted volume, a permission problem and a typo'd env var otherwise all
+ * present as "rename failed", with nothing useful reaching the client.
  */
 final class Filesystem
 {
@@ -65,26 +62,17 @@ final class Filesystem
     /**
      * Moves a directory that may be on a different mount point.
      *
-     * rename(2) compares MOUNT POINTS, not filesystems -- the kernel rejects
-     * `old_path.mnt != new_path.mnt` before it ever looks at the superblock --
-     * and PHP's rename() has no fallback for directories, so a cross-mount move
-     * fails outright with EXDEV rather than degrading to a copy. Whether the
-     * build temp tree and the published tree share a mount is the operator's
-     * choice -- see JobWorkspace -- so staging a finished build may land on
-     * either path, and this exists so the code does not have to care.
+     * rename(2) compares mount points, not filesystems, and PHP's rename() has
+     * no directory fallback -- a cross-mount move fails outright with EXDEV
+     * instead of degrading to a copy. Whether the build temp tree and the
+     * published tree share a mount is the operator's choice (see
+     * JobWorkspace), so this exists to make that not matter. rename() is
+     * tried first since it's atomic and instant when they do share one.
      *
-     * rename() is still tried first: it is atomic and instant when the two
-     * happen to share a mount, which is the case in the unit tests and in any
-     * deployment that consolidates them.
-     *
-     * THE COPY IS NOT ATOMIC, and callers have to account for that.
-     * JobWorkspace::publish() copies into PUBLISHED_DIR/.staging rather than
-     * the live path, so a crash mid-copy leaves a half-built tree somewhere
-     * nothing serves.
-     *
-     * It is also not instant: the message stays unacked throughout, so a large
-     * enough site can run past the broker's consumer_timeout (120s in dev, 300s
-     * in prod) and be redelivered.
+     * The copy fallback is neither atomic nor instant: callers must account
+     * for a crash mid-copy (JobWorkspace::publish() copies into .staging, not
+     * the live path, for that reason) and for a large site running past the
+     * broker's consumer_timeout while the message stays unacked.
      *
      * @throws \RuntimeException with the real reason if the move fails
      */
@@ -109,10 +97,10 @@ final class Filesystem
      * leaving files at whatever the umask gives them (0644 under the default,
      * which is what the published tree wants).
      *
-     * Symlinks are SKIPPED, not followed and not recreated. Nothing that
-     * generates a site writes them, so one appearing means something is wrong,
-     * and copying it would either duplicate content or publish a link pointing
-     * out of the tree. Skipping is logged so it is not silent.
+     * Symlinks are skipped, not followed or recreated: nothing that generates
+     * a site writes them, so one appearing means something is wrong, and
+     * copying it would either duplicate content or publish a link pointing
+     * out of the tree. Skipping is logged so it isn't silent.
      *
      * @throws \RuntimeException if a directory cannot be created or a file cannot be copied
      */

@@ -79,7 +79,7 @@ final class ContentDownloader
             fclose($handle);
 
             if (!$completed) {
-                @unlink($target); # Deletes the incomplete download
+                @unlink($target); // Deletes the incomplete download.
             }
         }
 
@@ -132,7 +132,7 @@ final class ContentDownloader
         return $written;
     }
 
-    // SECURITY
+    /** content_download_url comes from the request; only http/https with a host may be fetched. */
     private function assertFetchableUrl(string $url): void
     {
         // parse_url() yields null for a missing scheme and false for a URL it

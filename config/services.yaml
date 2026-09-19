@@ -4,15 +4,6 @@
 # Files in the packages/ subdirectory configure your dependencies.
 # See also https://symfony.com/doc/current/service_container/import.html
 parameters:
-    # THE SAME NUMBER IN TWO PLACES, so it is a parameter rather than two
-    # literals: messenger.yaml decides when the transport stops redelivering,
-    # BuildJobHandler decides when to stop building and report. If they
-    # disagree, either an attempt is thrown away unused (handler too low) or
-    # the last failure is dropped unreported (handler too high).
-    #
-    # 2 means two build attempts: deliveries arrive with retry counts 0, 1 and
-    # 2; the first two build, the third only reports.
-    build.max_retries: 2
 
 services:
     # default configuration for services in *this* file
@@ -33,8 +24,6 @@ services:
     # arriving anywhere else, and keeps the message-class -> handler link
     # readable here instead of via reflection on __invoke()'s parameter.
     App\Message\BuildJobHandler:
-        arguments:
-            $maxRetries: '%build.max_retries%'
         tags:
             - { name: messenger.message_handler, handles: App\Message\BuildJob, from_transport: builds }
 
@@ -57,14 +46,16 @@ services:
             $buildTempDir: '%env(JOB_STORAGE_DIR)%'
             $publishedDir: '%env(PUBLISHED_DIR)%'
 
-    # The same two roots, because it replaces them by name in a failure message
-    # before that message is POSTed to a client-supplied URL.
-    App\Callback\ErrorRedactor:
+    # The same two roots again: this one replaces them by name in a failure
+    # message before it is POSTed to a client-supplied URL. Autoconfigured as an
+    # event subscriber -- it is not a messenger.message_handler and is
+    # deliberately not tagged as one.
+    App\Message\BuildFailureHandler:
         arguments:
             $buildTempDir: '%env(JOB_STORAGE_DIR)%'
             $publishedDir: '%env(PUBLISHED_DIR)%'
 
-    App\Callback\StatusNotifier:
+    App\Job\StatusNotifier:
         arguments:
             # SECURITY: callback_status_url comes from the original API caller
             # and is validated nowhere upstream. This decoration is what stops
@@ -98,7 +89,6 @@ services:
             $maxDurationSeconds: 300
             $timeoutSeconds: 30
             $maxRedirects: 3
-
 when@test:
     services:
         # Public alias for a private service, so a test can assert on the retry

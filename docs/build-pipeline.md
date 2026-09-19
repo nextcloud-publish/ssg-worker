@@ -91,38 +91,41 @@ Everything below it is already fine — `SiteBuilder` mkdirs at `0755` and write
 
 ## Retry semantics
 
-`retry_strategy.max_retries: 2`, which means **two build attempts**:
+`retry_strategy.max_retries: 1`, which means **two build attempts**:
 
-| Delivery | `retryCount` | What happens |
-| --- | --- | --- |
-| 1 | 0 | builds; on a retryable failure, rethrows → redelivered after 15s |
-| 2 | 1 | builds; on a retryable failure, rethrows → redelivered after 60s |
-| 3 | 2 | **does not build.** Deletes the build dir, POSTs `failed`, acks. |
+| Delivery | What happens |
+| --- | --- |
+| 1 | builds; on a retryable failure, throws → redelivered after 15s |
+| 2 | builds; on a retryable failure, throws → **terminal**, reported `failed` |
 
-The gate is the first thing in the handler. The third delivery is the last one Messenger
-will make (`MultiplierRetryStrategy::isRetryable()` is `$retries < $maxRetries`), so a
-build started there would have nowhere to report a failure: throwing would have the
-message logged and dropped, and returning would claim a success that never happened.
+Every delivery builds — there is no gate in the handler — so the retry count *is* the
+build budget. A failure always leaves the handler by throwing, and the type decides what
+the transport does with it:
 
-The count reaches the handler through
-[RetryCountMiddleware](../src/Messenger/RetryCountMiddleware.php), because a handler is
-given the message and never the envelope. The same middleware carries the *previous
-attempt's error*, so the reporting delivery can say what went wrong without having run
-the build itself.
+- `\RuntimeException` goes out untouched, so the retry strategy applies.
+- `\InvalidArgumentException` is wrapped in `UnrecoverableMessageHandlingException`,
+  which Messenger checks *before* the retry strategy. Nothing a retry could change is
+  therefore reported immediately, without burning the attempt or the 15s of backoff.
 
-> **That error is best-effort, not a guarantee.** It rides in an `ErrorDetailsStamp`,
-> which travels as an AMQP header and holds a `FlattenException`. It round-trips only
-> because the container's serializer has `ProblemNormalizer` ahead of `ObjectNormalizer`;
-> the standalone `Serializer::create()` chain cannot decode it at all. If that ever
-> breaks, the whole envelope fails to decode and the build is dropped with no callback.
-> [StampRoundTripTest](../tests/Messenger/StampRoundTripTest.php) pins it, and the handler
-> falls back to a fixed sentence.
+**Reporting the failure is [BuildFailureHandler](../src/Message/BuildFailureHandler.php)'s
+job**, a `WorkerMessageFailedEvent` subscriber, and that is deliberate. A handler only
+sees failures it is running for, and some never reach it — the redelivery case below is
+the obvious one. `Worker::ack()` dispatches the event for every failed delivery, so
+subscribing is the only way to report *every* terminal failure rather than most of them.
+
+The subscriber runs at priority 0, below `SendFailedMessageForRetryListener`'s 100,
+because that listener is what calls `setForRetry()`: `willRetry()` only means anything
+after it has run. It takes the reason straight from `$event->getThrowable()`, in-process,
+so nothing depends on an error surviving a round trip through the transport serializer.
+
+Success is still reported by the handler, which is the only thing that knows the page
+count.
 
 **The budget is also spent by things that are not build failures.** A `consumer_timeout`
 requeue comes back with the AMQP redelivered flag set, and
-`RejectRedeliveredMessageMiddleware` throws *before* the handler runs — so a site that
-renders for longer than `consumer_timeout` burns both attempts and is reported as failed
-without ever finishing. That is why the dev broker's `consumer_timeout` was raised to
+`RejectRedeliveredMessageMiddleware` throws *before* the handler runs. The subscriber
+still sees it, so the client is told — but a site that renders for longer than
+`consumer_timeout` is reported as failed without ever finishing. That is why the dev broker's `consumer_timeout` was raised to
 120s. See [roadmap.md](roadmap.md).
 
 `jitter: 0` is not cosmetic: the jittered delay is interpolated into the delay *queue
@@ -187,17 +190,20 @@ and treat a terminal status as final.
 
 Two policies worth knowing:
 
-- **The callback never fails the message.** Letting `StatusNotifier` throw would replay
-  the whole handler — download, extract, render, publish — and spend the *build* retry
-  budget on an HTTP problem, so a slow client endpoint would be reported as a failed
-  build. The handler catches, logs `[ERROR]`, and acks.
-- **An unreachable callback URL therefore means a successful build is never reported.**
-  That is what this design trades away; see [roadmap.md](roadmap.md).
+- **A failed callback fails the build.** The `notify()` call sits inside the handler's
+  `try`, so an unreachable endpoint is a `\RuntimeException` like any other and the
+  message is redelivered. That re-runs the *whole* build — download, extract, render,
+  publish — because nothing records that the site was already live. Expensive, and
+  deliberate: the alternative is a finished build the client is never told about.
+- **A callback still failing on the last attempt is reported `failed`, for a site that
+  is live and correct.** `BuildFailureHandler` cannot tell "the build broke" from "the
+  build worked but the phone line was down". Closing that needs a job record; see
+  [roadmap.md](roadmap.md).
 
-`StatusNotifier` still distinguishes retryable from permanent responses internally (408,
-429, 5xx and transport failures are retryable; other 4xx and any 3xx are not), so the
-policy lives in one visible `catch` in the handler and the class stays portable if the
-callback ever moves to its own queue.
+`StatusNotifier` distinguishes retryable from permanent responses (408, 429, 5xx and
+transport failures are retryable; other 4xx and any 3xx are not), and that split is load
+bearing here: a permanent rejection surfaces as `\InvalidArgumentException`, which the
+handler wraps as unrecoverable, so a 404 callback costs no rebuild at all.
 
 ### Error redaction
 
@@ -205,11 +211,15 @@ Every `RuntimeException` in the pipeline embeds an absolute path on purpose — 
 what an operator needs. `callback_status_url` is chosen by whoever called the API, and
 sending the raw string there hands them a map of the volume layout.
 
-So the two audiences get different strings:
-[ErrorRedactor](../src/Callback/ErrorRedactor.php) replaces the configured roots with
-`<build>` / `<published>` / `<failed>`, collapses any other absolute path, strips URL
-credentials and truncates. The handler logs the raw message and redacts only on the way
-to the callback. The message stays diagnostic without becoming a disclosure.
+So the two audiences get different strings.
+[BuildFailureHandler](../src/Message/BuildFailureHandler.php) logs the message as thrown
+and redacts only on the way to the callback: its `redact()` replaces the configured roots
+with `<build>` / `<published>`, collapses any other absolute path, strips URL credentials
+and truncates. The result stays diagnostic without becoming a disclosure —
+`<build>/.../content.tar.gz` still says which stage failed.
+
+It is private to that class because the failure callback is the only thing that sends an
+error anywhere; success carries none.
 
 ## Single-service, and what it trades away
 
@@ -228,7 +238,7 @@ re-adding the queues, not a rewrite.
 | Queues | `q.builds`, `q.build-results`, `q.build-failures`, `q.build-dead` | `q.builds` |
 | Message classes hand-synced across repos | 3 | 1 (`BuildJob`) |
 | A failed callback replays | three `stat()` calls | the whole build — so the handler acks instead |
-| A build that succeeds but cannot report | retried from its own queue | **never reported** |
+| A build that succeeds but cannot report | the callback alone is retried | **the whole build is retried** |
 
 That last row is the real cost. If it becomes unacceptable before a migration, the cheap
 fix is a `.staging/<build_id>.done` marker written after publishing and removed after a

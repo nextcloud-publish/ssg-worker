@@ -4,18 +4,18 @@ declare(strict_types=1);
 
 namespace App\Tests\Message;
 
-use App\Callback\ErrorRedactor;
-use App\Callback\StatusNotifier;
 use App\Job\ArchiveExtractor;
 use App\Job\ContentDownloader;
 use App\Job\JobWorkspace;
 use App\Job\SiteRenderer;
+use App\Job\StatusNotifier;
 use App\Message\BuildJob;
 use App\Message\BuildJobHandler;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpClient\MockHttpClient;
 use Symfony\Component\HttpClient\Response\MockResponse;
+use Symfony\Component\Messenger\Exception\UnrecoverableMessageHandlingException;
 
 /**
  * Constructs BuildJobHandler with its real collaborators instead of mocks --
@@ -23,11 +23,11 @@ use Symfony\Component\HttpClient\Response\MockResponse;
  * by the request never being made (getRequestsCount() === 0), not by a mock
  * expectation.
  *
- * Most of this file is about the retry gate, because that is where the
- * behaviour lives that nothing else can check: max_retries is 2, so deliveries
- * arrive with retry counts 0, 1 and 2, the first two build, and the third only
- * reports. Getting that boundary wrong either loses the client's answer or
- * rebuilds forever, and neither shows up anywhere else offline.
+ * The handler builds and, on success, publishes and reports. Every failure
+ * leaves by throwing: the transport decides whether to retry, and
+ * BuildFailureHandler turns the last one into a `failed` callback. So the
+ * assertions here are about what is thrown and what reaches disk --
+ * BuildFailureHandlerTest covers what the client is told.
  *
  * The handler takes an already-decoded BuildJob, so there are no tests here for
  * malformed JSON or missing keys -- Messenger's serializer rejects those first.
@@ -38,9 +38,6 @@ final class BuildJobHandlerTest extends TestCase
     private const BUILD_ID = '16ef078ad37fd894';
     private const SLUG = 'integration-test-collective';
     private const TITLE = 'Integration Test Collective';
-
-    /** The delivery on which the handler reports instead of building. */
-    private const FINAL_DELIVERY = 2;
 
     // Mock Collective content download url for testing with correct structure.
     private const CONTENT_URL = 'https://some-nextcloud.org/apps/collectives/some-collective-1234/publish/markdown_bundle';
@@ -136,8 +133,6 @@ final class BuildJobHandlerTest extends TestCase
             new SiteRenderer(),
             $workspace,
             new StatusNotifier($this->callbackClient),
-            new ErrorRedactor($this->buildTemp(), $this->publishedRoot()),
-            maxRetries: self::FINAL_DELIVERY,
         );
     }
 
@@ -240,17 +235,6 @@ final class BuildJobHandlerTest extends TestCase
         self::assertStringContainsString('My Team Handbook', (string) file_get_contents($index));
     }
 
-    /** A message enqueued before `title` existed decodes with '' and still builds. */
-    public function testFallsBackToTheSlugWhenNoTitleWasSent(): void
-    {
-        ($this->handler())($this->job(title: ''));
-
-        self::assertStringContainsString(
-            self::SLUG,
-            (string) file_get_contents($this->publishedSite() . '/index.html'),
-        );
-    }
-
     public function testReportsSuccessWithThePageCount(): void
     {
         ($this->handler())($this->job());
@@ -274,7 +258,7 @@ final class BuildJobHandlerTest extends TestCase
     }
 
     /**
-     * A rebuild is a NEW build_id against the same slug, and it must replace
+     * A rebuild is a new build_id against the same slug, and it must replace
      * the live site rather than merge into it -- a page deleted from the
      * collective has to disappear.
      */
@@ -290,112 +274,40 @@ final class BuildJobHandlerTest extends TestCase
         self::assertSame(2, $this->client->getRequestsCount());
     }
 
-    // --- the retry gate ---------------------------------------------------
+    // --- failures leave by throwing ---------------------------------------
 
     /**
-     * @return array<string, array{int}>
+     * A retryable failure is rethrown untouched so the transport redelivers it.
+     * Reporting here would POST a `failed` for a build that may still succeed;
+     * BuildFailureHandler reports only once no attempt is left.
      */
-    public static function provideNonFinalRetryCounts(): array
-    {
-        return ['first delivery' => [0], 'second delivery' => [1]];
-    }
-
-    /**
-     * A delivery that still has an attempt left rethrows and tells nobody: the
-     * reason rides forward on the envelope's ErrorDetailsStamp, and whichever
-     * delivery finds no attempt left is the one that reports it. Reporting here
-     * too would POST a `failed` for a build that is about to succeed.
-     */
-    #[DataProvider('provideNonFinalRetryCounts')]
-    public function testANonFinalFailureIsRethrownAndReportsNothing(int $retryCount): void
+    public function testARetryableFailureIsRethrownAndReportsNothing(): void
     {
         try {
-            ($this->failingHandler())($this->job(), $retryCount);
-            self::fail('Expected the failure to be rethrown so Messenger redelivers it.');
+            ($this->failingHandler())($this->job());
+            self::fail('Expected the failure to be rethrown so Messenger can redeliver it.');
         } catch (\RuntimeException $e) {
             self::assertStringContainsString('Extracting', $e->getMessage());
+            self::assertNotInstanceOf(UnrecoverableMessageHandlingException::class, $e);
         }
 
-        self::assertSame([], $this->callbacks, 'a retryable failure must not report an outcome');
-
-        // The workdir is left alone: the next attempt's reset() wipes it, and
-        // clearing it here would throw away the evidence while the build is
-        // still in flight.
-        self::assertDirectoryExists($this->jobDir());
+        self::assertSame([], $this->callbacks, 'the handler never reports an outcome itself');
     }
 
     /**
-     * The delivery the transport will not redeliver after. It must not build --
-     * a failure would have nowhere to go -- and must return normally so the
-     * message is acked.
+     * The workdir survives a retryable failure: the next attempt's reset()
+     * wipes it, and clearing it here would throw away a build still in flight.
      */
-    public function testTheFinalDeliveryReportsWithoutBuilding(): void
+    public function testARetryableFailureLeavesTheWorkdirForTheNextAttempt(): void
     {
-        ($this->handler())($this->job(), self::FINAL_DELIVERY, 'tar: unexpected EOF in archive');
-
-        // Did not build: no archive was fetched, nothing was published.
-        self::assertSame(0, $this->client->getRequestsCount());
-        self::assertDirectoryDoesNotExist($this->publishedSite());
-
-        $body = $this->onlyCallback();
-        self::assertSame('failed', $body['status']);
-        self::assertSame('tar: unexpected EOF in archive', $body['error']);
-    }
-
-    /**
-     * A failed build keeps nothing: the wreckage is deleted, not moved aside.
-     * The error in the callback and the log line are the whole record.
-     */
-    public function testTheFinalDeliveryDeletesWhatThePreviousAttemptLeft(): void
-    {
-        // Attempt 2's wreckage: a job tree that was never published.
-        mkdir($this->jobDir() . '/input', 0o750, true);
-        file_put_contents($this->jobDir() . '/input/content.tar.gz', 'half a download');
-
-        ($this->handler())($this->job(), self::FINAL_DELIVERY, 'Download failed');
-
-        self::assertDirectoryDoesNotExist($this->jobDir());
-        // The site's parent goes too once it holds no other build.
-        self::assertDirectoryDoesNotExist($this->buildTemp() . '/' . self::SITE_ID);
-        self::assertSame('failed', $this->onlyCallback()['status']);
-    }
-
-    /**
-     * An unsafe id means no directory was ever created, and the ids cannot be
-     * turned into a path safely. Cleanup must not be attempted with them, and
-     * must not stop the client being told.
-     */
-    public function testATerminalFailureWithAnUnsafeIdStillReportsAndDeletesNothing(): void
-    {
-        $escapee = \dirname($this->root) . '/worker-clear-escaped-' . bin2hex(random_bytes(6));
-        mkdir($escapee, 0o750, true);
-        file_put_contents($escapee . '/keep.md', 'must survive');
-
         try {
-            ($this->handler())($this->job(staticSiteId: '../' . basename($escapee)));
-
-            self::assertFileExists($escapee . '/keep.md');
-            self::assertSame('failed', $this->onlyCallback()['status']);
-        } finally {
-            exec('rm -rf ' . escapeshellarg($escapee));
+            ($this->failingHandler())($this->job());
+        } catch (\RuntimeException) {
+            self::assertDirectoryExists($this->jobDir());
         }
     }
 
-    /**
-     * ErrorDetailsStamp travels as an AMQP header and holds a FlattenException;
-     * it round-trips today, but a header is a weaker promise than a body, so
-     * the client still has to be told something.
-     */
-    public function testTheFinalDeliveryStillReportsWhenTheReasonWasLost(): void
-    {
-        ($this->handler())($this->job(), self::FINAL_DELIVERY, null);
-
-        $body = $this->onlyCallback();
-        self::assertSame('failed', $body['status']);
-        self::assertNotEmpty($body['error']);
-    }
-
-    // --- terminal failures, reported immediately --------------------------
+    // --- terminal failures are marked unrecoverable -----------------------
 
     /**
      * @return array<string, array{BuildJob}>
@@ -423,24 +335,28 @@ final class BuildJobHandlerTest extends TestCase
     }
 
     /**
-     * Nothing a retry could change, so the client is told on the first
-     * delivery rather than after both attempts and ~75s of backoff.
+     * UnrecoverableMessageHandlingException is checked before the retry
+     * strategy, so this is what stops an unsafe slug spending a retry and 15s
+     * of backoff on an answer that cannot change.
      */
     #[DataProvider('provideTerminalJobs')]
-    public function testATerminalFailureIsReportedAtOnceAndNeverRethrown(BuildJob $job): void
+    public function testATerminalFailureIsMarkedUnrecoverable(BuildJob $job): void
     {
-        ($this->handler())($job, 0);
+        $this->expectException(UnrecoverableMessageHandlingException::class);
 
-        $body = $this->onlyCallback();
-        self::assertSame('failed', $body['status']);
+        ($this->handler())($job);
     }
 
-    #[DataProvider('provideTerminalJobs')]
-    public function testATerminalFailureIsStillNotRethrownOnALaterDelivery(BuildJob $job): void
+    /** The original reason has to survive the wrapping, or the callback is useless. */
+    public function testTheUnrecoverableWrapperKeepsTheReason(): void
     {
-        ($this->handler())($job, 1);
-
-        self::assertSame('failed', $this->onlyCallback()['status']);
+        try {
+            ($this->handler())($this->job(slug: 'My Team Handbook'));
+            self::fail('Expected an unsafe slug to be refused.');
+        } catch (UnrecoverableMessageHandlingException $e) {
+            self::assertStringContainsString('slug', $e->getMessage());
+            self::assertInstanceOf(\InvalidArgumentException::class, $e->getPrevious());
+        }
     }
 
     public function testAnUnsafeStaticSiteIdWritesNothingOutsideTheRoots(): void
@@ -449,28 +365,33 @@ final class BuildJobHandlerTest extends TestCase
         // a message off the queue cannot write outside the volume.
         $escapee = \dirname($this->root) . '/worker-escaped-' . bin2hex(random_bytes(6));
 
-        ($this->handler())($this->job(staticSiteId: '../' . basename($escapee)));
-
-        self::assertDirectoryDoesNotExist($escapee);
-        self::assertSame(0, $this->client->getRequestsCount());
-        self::assertSame('failed', $this->onlyCallback()['status']);
+        try {
+            ($this->handler())($this->job(staticSiteId: '../' . basename($escapee)));
+            self::fail('Expected a traversal id to be refused.');
+        } catch (UnrecoverableMessageHandlingException) {
+            self::assertDirectoryDoesNotExist($escapee);
+            self::assertSame(0, $this->client->getRequestsCount());
+        }
     }
 
     public function testAnUnsafeSlugPublishesNothing(): void
     {
         $escapee = \dirname($this->root) . '/worker-escaped-slug-' . bin2hex(random_bytes(6));
 
-        ($this->handler())($this->job(slug: '../' . basename($escapee)));
-
-        self::assertDirectoryDoesNotExist($escapee);
-        self::assertSame('failed', $this->onlyCallback()['status']);
+        try {
+            ($this->handler())($this->job(slug: '../' . basename($escapee)));
+            self::fail('Expected a traversal slug to be refused.');
+        } catch (UnrecoverableMessageHandlingException) {
+            self::assertDirectoryDoesNotExist($escapee);
+            self::assertDirectoryDoesNotExist($this->publishedRoot());
+        }
     }
 
     /**
      * An archive with no pages renders the same nothing however often it is
-     * fetched, so it is terminal rather than worth two attempts.
+     * fetched, so it is terminal rather than worth a retry.
      */
-    public function testAnArchiveWithNoPagesIsReportedAtOnce(): void
+    public function testAnArchiveWithNoPagesIsTerminal(): void
     {
         $empty = sys_get_temp_dir() . '/worker-empty-fixture-' . bin2hex(random_bytes(6));
         mkdir($empty . '/nothing', 0o755, true);
@@ -481,38 +402,49 @@ final class BuildJobHandlerTest extends TestCase
         exec('rm -rf ' . escapeshellarg($empty) . ' ' . escapeshellarg($archive));
 
         $handler = $this->handler(new MockHttpClient(fn (): MockResponse => new MockResponse($bytes)));
-        $handler($this->job(), 0);
 
-        $body = $this->onlyCallback();
-        self::assertSame('failed', $body['status']);
-        self::assertStringContainsString('no Markdown pages', $body['error']);
+        $this->expectException(UnrecoverableMessageHandlingException::class);
+        $this->expectExceptionMessage('no Markdown pages');
+
+        $handler($this->job());
     }
 
     // --- the callback is never allowed to fail the message ----------------
 
     /**
-     * Letting the notifier's exception out would replay the whole handler --
-     * download, extract, render, publish -- and spend the BUILD retry budget on
-     * an HTTP problem, so a slow client endpoint would be reported as a failed
-     * build. The site is already live; the log is the record.
+     * A build nobody could be told about is not done. The notifier's exception
+     * is allowed out, so the transport redelivers and the whole build re-runs
+     * -- expensive, but it is what stops a transient callback failure silently
+     * stranding a finished build.
      */
-    public function testAFailingCallbackDoesNotFailASuccessfulBuild(): void
+    public function testARetryableCallbackFailureFailsTheBuild(): void
     {
-        $this->callbackClient = new MockHttpClient(new MockResponse('', ['http_code' => 500]));
+        $this->callbackClient = new MockHttpClient(new MockResponse('', ['http_code' => 503]));
 
-        ($this->handler())($this->job());
+        try {
+            ($this->handler())($this->job());
+            self::fail('Expected an unreachable callback to fail the message.');
+        } catch (\RuntimeException $e) {
+            self::assertNotInstanceOf(UnrecoverableMessageHandlingException::class, $e);
+            self::assertStringContainsString('503', $e->getMessage());
+        }
 
+        // The site went live regardless -- publishing happened before the POST.
         self::assertFileExists($this->publishedSite() . '/index.html');
-        self::assertStringContainsString('[ERROR] could not report success', (string) file_get_contents($this->logFile));
     }
 
-    public function testAFailingCallbackDoesNotFailTheFinalDelivery(): void
+    /**
+     * A 404 on the callback will not start working on the retry, and retrying
+     * costs a full rebuild. Terminal, like any other InvalidArgumentException
+     * out of the pipeline.
+     */
+    public function testAPermanentlyRejectedCallbackIsNotRetried(): void
     {
-        $this->callbackClient = new MockHttpClient(new MockResponse('', ['http_code' => 500]));
+        $this->callbackClient = new MockHttpClient(new MockResponse('', ['http_code' => 404]));
 
-        ($this->handler())($this->job(), self::FINAL_DELIVERY, 'Download failed');
+        $this->expectException(UnrecoverableMessageHandlingException::class);
 
-        self::assertStringContainsString('[ERROR] could not report failed', (string) file_get_contents($this->logFile));
+        ($this->handler())($this->job());
     }
 
     /**
@@ -526,19 +458,5 @@ final class BuildJobHandlerTest extends TestCase
 
         self::assertFileExists($this->publishedSite() . '/index.html');
         self::assertSame([], $this->callbacks);
-    }
-
-    /**
-     * The pipeline's messages embed absolute paths on purpose, for the log. The
-     * callback goes to a URL the API caller chose, and must not hand them a map
-     * of the volume layout.
-     */
-    public function testTheReportedErrorCarriesNoFilesystemPaths(): void
-    {
-        ($this->failingHandler())($this->job(), self::FINAL_DELIVERY, 'Extracting ' . $this->buildTemp() . '/x/y/content.tar.gz failed');
-
-        $error = $this->onlyCallback()['error'];
-        self::assertStringNotContainsString($this->buildTemp(), $error);
-        self::assertStringContainsString('<build>', $error);
     }
 }

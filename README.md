@@ -64,8 +64,8 @@ collective.
 - **Success** → the rendered tree is swapped into `PUBLISHED_DIR/<slug>/`, the build
   tree is cleared, and `success` is POSTed to `callback_status_url`.
 - **Transient failure** → rethrown, and the transport redelivers after 15s.
-  `retry_strategy.max_retries: 2` gives **two build attempts**; the third delivery does
-  not build, it deletes the build directory and POSTs `failed`.
+  `retry_strategy.max_retries: 1` gives **two build attempts**; when the second fails,
+  BuildFailureHandler deletes the build directory and POSTs `failed`.
 - **Permanent failure** (an unsafe id or slug, a URL we will not fetch, an archive with
   no markdown) → reported `failed` on the first delivery, never retried.
 
@@ -159,7 +159,7 @@ php bin/phpunit
 Real collaborators rather than mocks throughout (the classes are `final`, so PHP could
 not mock them anyway): `MockHttpClient` replaces the network and a temp directory
 replaces the volumes, so status codes, oversized bodies, broken transfers, traversal
-attempts, staging and the swap, cross-mount copies, cleanup, the retry gate and error
+attempts, staging and the swap, cross-mount copies, cleanup, failure reporting and error
 redaction all run offline.
 
 **Passing tests say nothing about whether `messenger:consume builds` survives its first
@@ -173,21 +173,21 @@ lists what that leaves uncovered and which dev-stack checks cover it instead.
 ```text
 Dockerfile                   php:8.5-cli-alpine + ext-amqp + pcntl, builds vendor/ at image build time
 config/
-  packages/messenger.yaml    builds transport, retry_strategy, RetryCountMiddleware
+  packages/messenger.yaml    builds transport and retry_strategy
   packages/property_info.yaml constructor extractor, so BuildJob can be built
-  services.yaml              the three storage roots, %build.max_retries%, SSRF-guarded http client
+  services.yaml              the two storage roots, SSRF-guarded http client
 src/
   Job/                       JobWorkspace: every path, the allow-list guarding them, and a build's
                              lifecycle -- reset() before, publish() on success, clear() at the end
                              ContentDownloader: streams content_download_url to disk, scheme-checked and size-capped
                              ArchiveExtractor: unpacks the archive into input/content_unarchived
                              SiteRenderer: renders the extracted pages into output/
+                             StatusNotifier: POSTs the outcome to callback_status_url
                              Filesystem: the primitives, each failing with the OS's own reason
-  Callback/                  StatusNotifier: POSTs the outcome to callback_status_url
-                             ErrorRedactor: keeps volume paths out of what the client is sent
   Message/                   BuildJob: the message shape for q.builds, mirroring publish's message class
-                             BuildJobHandler: registered in services.yaml, owns the build and its outcome
-  Messenger/                 RetryCountMiddleware: lifts the retry count and previous error off the envelope
+                             BuildJobHandler: registered in services.yaml, runs the build and reports success
+                             BuildFailureHandler: reports a build that ran out of attempts, deletes it,
+                             and keeps volume paths out of what the client is sent
 docs/                        build-pipeline.md (design of record), roadmap.md (limitations)
 tests/                       PHPUnit tests for the above
 ```

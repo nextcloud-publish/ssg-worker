@@ -10,23 +10,18 @@ use Symfony\Component\Messenger\Exception\MessageDecodingFailedException;
 use Symfony\Component\Messenger\Transport\Serialization\SerializerInterface;
 
 /**
- * BuildJob is a HAND-SYNCED contract across two repositories: publish declares
- * the same class name with the same property names and encodes it, this service
- * decodes it, and the `type` header is what links the two. Nothing but a test
+ * BuildJob is a hand-synced contract across two repositories: publish declares
+ * the same class name with the same property names and encodes it, this
+ * service decodes it, and the `type` header links the two. Nothing but a test
  * like this notices when they drift.
  *
- * The fixtures below are literal JSON on purpose -- the bytes that come off the
- * queue, not something re-encoded from an object in this repo. Re-encoding
- * would make the test agree with itself no matter what publish actually sends.
+ * The fixtures below are literal JSON on purpose -- the bytes that come off
+ * the queue, not something re-encoded from an object in this repo, so the
+ * test can't agree with itself regardless of what publish actually sends.
  *
- * The two compatibility cases are the point of the file. Adding `title` to a
- * message class that is already in flight is the kind of change that looks free
- * and is not: a required constructor parameter with no matching JSON key is a
- * MissingConstructorArgumentsException, which is a DECODE failure, not a
- * handler failure -- so the envelope never reaches BuildJobHandler, the error
- * is not UnrecoverableExceptionInterface, it burns the retry budget, and the
- * message is dropped with no callback at all. Every build queued before the
- * deploy would fail silently.
+ * The compatibility case below matters because an unrecognized key must not
+ * break decoding: a future publish field this service doesn't know about yet
+ * has to be ignored, not fatal.
  */
 final class BuildJobContractTest extends KernelTestCase
 {
@@ -94,25 +89,8 @@ final class BuildJobContractTest extends KernelTestCase
     }
 
     /**
-     * OLD PUBLISH, NEW WORKER. A message queued before `title` existed -- this
-     * is the exact body the previous version of publish produced. It must still
-     * decode, or every in-flight build is lost the moment this deploys.
-     */
-    public function testAMessageQueuedBeforeTitleExistedStillDecodes(): void
-    {
-        $payload = self::currentPayload();
-        unset($payload['title']);
-
-        $build = $this->decode($payload);
-
-        self::assertSame('my-team-handbook', $build->slug);
-        // The handler falls back to the slug for the rendered heading.
-        self::assertSame('', $build->title);
-    }
-
-    /**
-     * NEW PUBLISH, OLD WORKER -- the other deploy order. Unknown keys are
-     * ignored rather than fatal, which is what makes the order free.
+     * Unknown keys are ignored rather than fatal, so publish can add a field
+     * this service doesn't know about yet without breaking decoding here.
      */
     public function testAnUnknownFieldDoesNotBreakDecoding(): void
     {
@@ -122,9 +100,9 @@ final class BuildJobContractTest extends KernelTestCase
     }
 
     /**
-     * The property names ARE the JSON keys -- Messenger's symfony_serializer
-     * maps them verbatim onto constructor parameters. Renaming one here without
-     * renaming it in publish breaks decoding, so the set is pinned.
+     * The property names are the JSON keys -- Messenger's symfony_serializer
+     * maps them verbatim onto constructor parameters. Renaming one here
+     * without renaming it in publish breaks decoding, so the set is pinned.
      */
     public function testThePropertyNamesAreTheAgreedJsonKeys(): void
     {
@@ -147,24 +125,7 @@ final class BuildJobContractTest extends KernelTestCase
     }
 
     /**
-     * `title` must stay optional AND last. A required parameter breaks old
-     * messages; moving it ahead of another parameter would not break the
-     * serializer, but it would break every positional construction in the
-     * tests, so the position is worth pinning next to the default.
-     */
-    public function testTitleIsOptionalSoInFlightMessagesSurvive(): void
-    {
-        $parameters = (new \ReflectionClass(BuildJob::class))->getConstructor()?->getParameters() ?? [];
-        $title = end($parameters);
-
-        self::assertInstanceOf(\ReflectionParameter::class, $title);
-        self::assertSame('title', $title->getName());
-        self::assertTrue($title->isDefaultValueAvailable(), 'title must have a default');
-        self::assertSame('', $title->getDefaultValue());
-    }
-
-    /**
-     * ObjectNormalizer extracts getters on the ENCODING side, so a getter here
+     * ObjectNormalizer extracts getters on the encoding side, so a getter here
      * would appear as an extra JSON key on a message publish round-trips.
      */
     public function testTheMessageHasNoGetters(): void

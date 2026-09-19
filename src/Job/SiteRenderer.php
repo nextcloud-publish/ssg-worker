@@ -25,10 +25,8 @@ final class SiteRenderer
     public function render(string $pagesDir, string $outputDir, string $siteTitle): int
     {
         // Checked here rather than left to SiteBuilder, which reports it as a
-        // RuntimeException. An archive with no pages is a permanent content
-        // problem: re-downloading and re-rendering it produces the same
-        // nothing, so retrying costs the client both attempts and a minute of
-        // backoff before being told what was wrong the first time.
+        // RuntimeException. No pages is a permanent content problem, not a
+        // transient one worth retrying.
         if (!$this->hasMarkdownPages($pagesDir)) {
             throw new \InvalidArgumentException('The archive contains no Markdown pages.');
         }

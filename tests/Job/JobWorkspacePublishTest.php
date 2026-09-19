@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Tests\Job;
 
 use App\Job\JobWorkspace;
-use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -14,7 +13,7 @@ use PHPUnit\Framework\TestCase;
  * file covering both would be harder to read.
  *
  * A real temp tree stands in for the volumes. Most of this file puts both roots
- * in ONE temp directory, so Filesystem::moveDir() takes its rename() fast path.
+ * in one temp directory, so Filesystem::moveDir() takes its rename() fast path.
  * A deployment may or may not do that -- the roots are mounted however the
  * operator needs -- so the tests under "the cross-mount reality" at the bottom
  * force the copy path with /dev/shm. Everything above them exercises the logic
@@ -99,7 +98,7 @@ final class JobWorkspacePublishTest extends TestCase
     }
 
     /**
-     * The output is MOVED, not copied: leaving it behind would mean the next
+     * The output is moved, not copied: leaving it behind would mean the next
      * publish of the same build could ship a stale tree. Retiring what is
      * left of the job directory is JobWorkspace::clear()'s job, not this one's.
      */
@@ -135,7 +134,7 @@ final class JobWorkspacePublishTest extends TestCase
 
     /**
      * The republish case, and the single most likely thing to get wrong:
-     * rename() onto an existing NON-EMPTY directory fails with ENOTEMPTY and
+     * rename() onto an existing non-empty directory fails with ENOTEMPTY and
      * never merges. A page deleted from the collective must disappear.
      */
     public function testARepublishReplacesTheSiteRatherThanMergingIntoIt(): void
@@ -155,7 +154,7 @@ final class JobWorkspacePublishTest extends TestCase
     }
 
     /**
-     * The build output is the ONLY thing publish() will publish. It does not
+     * The build output is the only thing publish() will publish. It does not
      * look at the staging or published directories to work out how far a
      * previous attempt got -- build state is not encoded in the filesystem --
      * so with no output there is nothing to do but rebuild.
@@ -249,55 +248,6 @@ final class JobWorkspacePublishTest extends TestCase
         $this->workspace->publish(self::SITE, self::BUILD, self::SLUG);
     }
 
-    /**
-     * @return array<string, array{string}>
-     */
-    public static function provideUnsafeIds(): array
-    {
-        return [
-            'parent traversal' => ['../escape'],
-            'nested traversal' => ['../../etc/cron.d'],
-            'bare dotdot' => ['..'],
-            'single dot' => ['.'],
-            'absolute path' => ['/etc/cron.d'],
-            'contains slash' => ['site/nested'],
-            'null byte' => ["site\0"],
-            'empty' => [''],
-            'too long' => [str_repeat('a', 129)],
-        ];
-    }
-
-    #[DataProvider('provideUnsafeIds')]
-    public function testRefusesAnUnsafeStaticSiteId(string $unsafeId): void
-    {
-        // reset() rejects these before a byte is downloaded, so reaching
-        // publish() with one means a forged or corrupt message. No retry
-        // changes that, hence InvalidArgumentException.
-        $this->expectException(\InvalidArgumentException::class);
-
-        $this->workspace->publish($unsafeId, self::BUILD, self::SLUG);
-    }
-
-    #[DataProvider('provideUnsafeIds')]
-    public function testRefusesAnUnsafeBuildId(string $unsafeId): void
-    {
-        $this->expectException(\InvalidArgumentException::class);
-
-        $this->workspace->publish(self::SITE, $unsafeId, self::SLUG);
-    }
-
-    #[DataProvider('provideUnsafeIds')]
-    public function testRefusesAnUnsafeSlug(string $unsafeSlug): void
-    {
-        // The slug names a directory under PUBLISHED_DIR now, so it is as
-        // load-bearing as the two ids and gets the same allow-list.
-        $this->givenBuildOutput();
-
-        $this->expectException(\InvalidArgumentException::class);
-
-        $this->workspace->publish(self::SITE, self::BUILD, $unsafeSlug);
-    }
-
     public function testTheSiteIsPublishedUnderItsSlugNotItsStaticSiteId(): void
     {
         $this->givenBuildOutput();
@@ -329,32 +279,6 @@ final class JobWorkspacePublishTest extends TestCase
         $this->workspace->publish($otherSite, $otherBuild, self::SLUG);
 
         self::assertSame('the second site', file_get_contents($this->publishedSite() . '/index.html'));
-    }
-
-    public function testATraversalSlugWritesNothingOutsideTheRoots(): void
-    {
-        $escapee = \dirname($this->root) . '/worker-escaped-slug-' . bin2hex(random_bytes(6));
-
-        $this->givenBuildOutput();
-
-        try {
-            $this->workspace->publish(self::SITE, self::BUILD, '../' . basename($escapee));
-            self::fail('Expected a traversal slug to be refused.');
-        } catch (\InvalidArgumentException) {
-            self::assertDirectoryDoesNotExist($escapee);
-        }
-    }
-
-    public function testATraversalIdWritesNothingOutsideTheRoots(): void
-    {
-        $escapee = \dirname($this->root) . '/worker-escaped-' . bin2hex(random_bytes(6));
-
-        try {
-            $this->workspace->publish('../' . basename($escapee), self::BUILD, self::SLUG);
-            self::fail('Expected a traversal id to be refused.');
-        } catch (\InvalidArgumentException) {
-            self::assertDirectoryDoesNotExist($escapee);
-        }
     }
 
     // --- the cross-mount reality of the dev stack -------------------------

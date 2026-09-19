@@ -6,48 +6,36 @@ namespace App\Job;
 
 /**
  * The filesystem side of a build: every path the worker uses, the allow-list
- * that makes a queue payload safe to use as one, and the lifecycle of a build's
- * directories -- reset() before the work, publish() on success, clear() at the
- * end either way.
+ * that makes a queue payload safe to use as one, and the lifecycle of a
+ * build's directories -- reset() before the work, publish() on success,
+ * clear() at the end either way.
  *
- * THE TWO ROOTS MAY OR MAY NOT SHARE A MOUNT. How JOB_STORAGE_DIR and
- * PUBLISHED_DIR are mounted is the operator's choice, so no method here may
- * assume. rename(2) rejects a cross-mount move with EXDEV and PHP has no
- * directory fallback, so moves between the roots go through
- * Filesystem::moveDir(), which falls back to a copy.
+ * JOB_STORAGE_DIR and PUBLISHED_DIR may or may not share a mount (the
+ * operator's choice), so no method here may assume. rename(2) rejects a
+ * cross-mount move with EXDEV and PHP has no directory fallback, so moves
+ * between the roots go through Filesystem::moveDir(), which falls back to a
+ * copy. The swap in publish() is exempt: staging lives inside publishedDir,
+ * so it's a same-mount rename regardless.
  *
- * The swap in publish() is exempt: staging lives inside publishedDir, so it is
- * a same-mount rename whatever the operator mounted.
- *
- * NOTHING HERE TRACKS ITS OWN PROGRESS. No method inspects the filesystem to
- * work out how far a previous attempt got; a retry rebuilds from scratch. Build
- * state belongs in a database -- see docs/roadmap.md.
+ * Nothing here tracks its own progress -- no method inspects the filesystem
+ * to see how far a previous attempt got, and a retry rebuilds from scratch.
+ * Build state belongs in a database; see docs/roadmap.md.
  */
 final class JobWorkspace
 {
     public const INPUT_DIR = 'input';
     public const OUTPUT_DIR = 'output';
+    // intermediate directory in publishedDir where a html build is copied to before being published
+    public const STAGING_DIR = '.staging'; 
 
-    /**
-     * Where a build is assembled before the swap. Inside publishedDir so the
-     * swap is a same-mount rename; dot-prefixed so nginx's `location ~ /\.`
-     * rule keeps a build still being copied unreachable.
-     */
-    public const STAGING_DIR = '.staging';
-
-    /**
-     * static_site_id, build_id and slug arrive from an HTTP payload, cross a
-     * queue, and become directory names. The publish API validates them too,
-     * but a queue is not a trust boundary and this is the check that actually
-     * stands between a payload and the filesystem. Dots are excluded outright,
-     * so a bare ".." cannot pass.
-     */
+    // regex to validate static_site_id, build_id and slug against spaces and dots
+    // to avoid e.g. directory traversal attacks
     private const SAFE_ID = '/^[A-Za-z0-9_-]{1,128}$/';
 
-    /** input/ and output/ are worker-private; nothing serves them. */
+    // input/ and output/ are worker-private
     private const JOB_DIR_MODE = 0o750;
 
-    /** The published tree is traversed by the uid that serves it, not ours. */
+    // the published directory is traversed by the uid that serves it
     private const PUBLISHED_DIR_MODE = 0o755;
 
     public function __construct(
@@ -64,30 +52,27 @@ final class JobWorkspace
     }
 
     /**
-     * @throws \InvalidArgumentException if either id is unsafe
-     */
-    public static function assertSafeIds(string $staticSiteId, string $buildId): void
-    {
-        if (!self::isValidId($staticSiteId)) {
-            throw new \InvalidArgumentException('Unsafe static_site_id.');
-        }
-
-        if (!self::isValidId($buildId)) {
-            throw new \InvalidArgumentException('Unsafe build_id.');
-        }
-    }
-
-    /**
-     * Separate from assertSafeIds() because the slug guards a different tree and
-     * not every caller has one: clear() touches only the build temp tree.
+     * Checks everything the job will use as a directory name, in one place.
      *
-     * @throws \InvalidArgumentException if the slug is unsafe
+     * CALL THIS ONCE, BEFORE ANY WORK -- BuildJobHandler does, as the first
+     * thing it does with a message. The methods below do not re-check: they
+     * take the three values as already vetted, so a caller that skips this can
+     * walk out of both roots.
+     *
+     * The one exception is clear(), which runs on the path where this check
+     * has just failed and so has to guard itself.
+     *
+     * Up front is also the cheap answer for the client: rejecting a slug after
+     * a five-minute render would waste the attempt and delay their answer for
+     * nothing.
+     *
+     * @throws \InvalidArgumentException if any of the three is unsafe
      */
-    public static function assertSafeSlug(string $slug): void
+    public static function assertSafeJob(string $staticSiteId, string $buildId, string $slug): void
     {
-        if (!self::isValidId($slug)) {
-            throw new \InvalidArgumentException('Unsafe slug.');
-        }
+        !self::isValidId($staticSiteId) ? throw new \InvalidArgumentException('Unsafe static_site_id.') : null;
+        !self::isValidId($buildId) ? throw new \InvalidArgumentException('Unsafe build_id.') : null;
+        !self::isValidId($slug) ? throw new \InvalidArgumentException('Unsafe slug.') : null;
     }
 
     // --- paths ------------------------------------------------------------
@@ -149,23 +134,21 @@ final class JobWorkspace
      * SsgLab\SiteBuilder never clears its output directory, so a reused output/
      * would republish pages the source no longer has.
      *
+     * Assumes assertSafeJob() has already passed for these ids.
+     *
      * @return string the job directory holding the pair
      *
-     * @throws \InvalidArgumentException if the static_site_id, build_id or slug is unsafe
-     * @throws \RuntimeException         if a directory cannot be created or removed
+     * @throws \RuntimeException if a directory cannot be created or removed
      */
-    public function reset(string $staticSiteId, string $buildId, string $slug): string
+    public function reset(string $staticSiteId, string $buildId): string
     {
-        self::assertSafeIds($staticSiteId, $buildId);
-
-        // Checked here, before a byte is downloaded, although nothing below
-        // uses it: rejecting the slug after a five-minute render would waste
-        // the attempt and delay the client's answer for nothing.
-        self::assertSafeSlug($slug);
-
         $jobDir = $this->jobDir($staticSiteId, $buildId);
 
-        if (is_dir($jobDir) && !Filesystem::removeDir($jobDir)) {
+        // No is_dir() guard: removeDir() reports success when there is nothing
+        // to remove, which is the normal case on a first attempt.
+        $cleared = Filesystem::removeDir($jobDir);
+
+        if (!$cleared) {
             throw new \RuntimeException(sprintf(
                 'Could not clear the previous attempt at %s',
                 $jobDir,
@@ -186,14 +169,13 @@ final class JobWorkspace
      * renaming the new one in -- and a crash in that window leaves the site
      * down until the next build.
      *
-     * @throws \InvalidArgumentException if an id or the slug is unsafe, or the build rendered nothing
+     * Assumes assertSafeJob() has already passed for these ids.
+     *
+     * @throws \InvalidArgumentException if the build rendered nothing
      * @throws \RuntimeException         on a filesystem failure worth retrying
      */
     public function publish(string $staticSiteId, string $buildId, string $slug): void
     {
-        self::assertSafeIds($staticSiteId, $buildId);
-        self::assertSafeSlug($slug);
-
         $output = $this->buildOutputDir($staticSiteId, $buildId);
         $published = $this->publishedSiteDir($slug);
         $staging = $this->stagingDir($buildId);
@@ -245,25 +227,26 @@ final class JobWorkspace
      * ended. This is what retires input/: the downloaded archive plus its fully
      * extracted copy, the bulkiest thing on the volume.
      *
-     * NEVER THROWS. On the failure path the caller's next act is telling the
+     * Never throws: on the failure path the caller's next act is telling the
      * client their build failed, and on the success path the site is already
      * live -- a cleanup problem must cost neither.
+     *
+     * THE ONE METHOD THAT DOES NOT ASSUME assertSafeJob() PASSED, because it is
+     * called precisely when it did not: BuildFailureHandler clears after every
+     * failed build, including one failed FOR an unsafe id. Nothing was created
+     * for such a job, and the ids cannot be turned into a path safely, so the
+     * only correct move is to do nothing.
      */
     public function clear(string $staticSiteId, string $buildId): void
     {
-        try {
-            self::assertSafeIds($staticSiteId, $buildId);
-        } catch (\InvalidArgumentException) {
-            // Reached routinely: an unsafe id is one of the things a build is
-            // failed for. reset() threw before creating anything, and the ids
-            // cannot be turned into a path safely, so doing nothing is the only
-            // safe move.
+        if (!self::isValidId($staticSiteId) || !self::isValidId($buildId)) {
             return;
         }
 
         $jobDir = $this->jobDir($staticSiteId, $buildId);
+        $removed = Filesystem::removeDir($jobDir);
 
-        if (!Filesystem::removeDir($jobDir)) {
+        if (!$removed) {
             error_log(sprintf('[WARN] could not remove the job directory at %s', $jobDir));
         }
 

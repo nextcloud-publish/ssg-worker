@@ -14,43 +14,49 @@ See [build-pipeline.md](build-pipeline.md) for how the pipeline works today.
 
 ## Known limitations
 
-### 1. A build that succeeds but cannot report is never reported
+### 1. A live site can be reported `failed`, and costs a rebuild to find out
 
-**Trigger:** `callback_status_url` is unreachable, or returns 5xx, for the whole
-attempt.
+**Trigger:** `callback_status_url` is unreachable, or returns 5xx, on both attempts.
 
-**Blast radius:** the site is live and correct; the client never hears so. The
-`[ERROR] could not report success` log line is the only record.
+**Blast radius:** the build is retried — which re-runs download, extract, render and
+publish in full, because nothing records that the site is already live — and if the
+callback is still failing at the end, `BuildFailureHandler` reports `failed` for a site
+that is live and correct.
 
-**Why it is like this:** the callback deliberately never fails the message. Letting
-`StatusNotifier` throw would replay the whole handler — download, extract, render,
-publish — and spend the *build* retry budget on an HTTP problem, so a slow client
-endpoint would end up reported as a failed build.
+**Why it is like this:** a transient callback failure used to be swallowed, which left a
+finished build the client was never told about. Throwing instead means the retry gets a
+second chance to deliver the news, at the cost of redoing work that had already
+succeeded. `BuildFailureHandler` cannot tell "the build broke" from "the build worked but
+the callback was unreachable", because nothing on disk distinguishes them.
 
-**Backstop today:** the log, plus a client-side timeout. The cheap fix short of a
-database is a `.staging/<build_id>.done` marker written after publishing and removed after
-a successful callback, letting a replay skip straight to the callback.
+**Bounded, at least:** `max_retries: 1`, so the waste is exactly one extra build.
+A *permanently* rejected callback (a 404, say) costs nothing — `StatusNotifier` raises
+`\InvalidArgumentException`, the handler marks it unrecoverable, and no retry happens.
 
-### 2. A mid-flight kill on the final delivery emits nothing
+**Backstop today:** the `[INFO] published ...` log line, which is written before the POST
+and so records what actually happened regardless of what the client was told.
 
-**Trigger:** OOM, `SIGKILL`, or a `consumer_timeout` during the cleanup/callback step
-of the *third* delivery.
+### 2. A build killed mid-process emits nothing
 
-**Blast radius:** no callback, no cleanup, nothing. The message comes back
-redelivered, `RejectRedeliveredMessageMiddleware` throws before the handler runs,
-`isRetryable` is false (2 ≮ 2), and the message is rejected. Nothing on disk records
+**Trigger:** OOM or `SIGKILL` while the worker is handling the message.
+
+**Blast radius:** no callback, no cleanup, nothing. Nothing on disk records
 `callback_status_url`, so nothing can notify the client afterwards — not even by hand.
 
-**Related, and more common:** the same middleware means *any* redelivery spends a build
-attempt without the handler seeing it. A site that renders for longer than
-`consumer_timeout` burns both attempts and is reported `failed` having never actually
-failed — and the person debugging it starts with the renderer, which is the wrong place.
-Dev `consumer_timeout` was raised to 120s for this; production is 300s.
+**Narrower than it was.** A `consumer_timeout` requeue used to land here too: the message
+came back redelivered, `RejectRedeliveredMessageMiddleware` threw before the handler ran,
+and the outcome was lost because only the handler could report one. `BuildFailureHandler`
+subscribes to `WorkerMessageFailedEvent`, which `Worker::ack()` dispatches for that case
+as well, so the client is now told. What remains is the case where the process dies
+outright and no event is dispatched at all.
 
-**Backstop today:** a client-side timeout. A `WorkerMessageFailedEvent` subscriber firing
-on `!$event->willRetry()` would catch every terminal path including this one (~40 lines),
-but it duplicates the start-of-handler gate and still cannot help when the process dies
-outright.
+**Still true, and the reason `consumer_timeout` matters:** any redelivery spends a build
+attempt without the handler seeing it, so a site that renders for longer than
+`consumer_timeout` is reported `failed` having never actually failed — and the person
+debugging it starts with the renderer, which is the wrong place. Dev `consumer_timeout`
+was raised to 120s for this; production is 300s.
+
+**Backstop today:** a client-side timeout.
 
 ### 3. The callback is at-least-once, and duplicates are likely
 
@@ -136,7 +142,7 @@ is having one at all.
 | --- | --- |
 | Slug ownership + a blocked-slug registry in the `publish` API | **4** — a collision becomes a synchronous 400 at enqueue time instead of a silent takeover ~75 seconds later |
 | A job row written *before* the build starts, carrying `callback_status_url` | **2** — a sweeper can report `failed` for jobs killed mid-flight, which nothing can do today because the URL dies with the message |
-| A `reported_at` / terminal-status column | **1** and **3** — an unreported success can be retried out-of-band, and a duplicate POST can be suppressed at the source, making at-least-once effectively once |
+| A `published_at` / `reported_at` pair | **1** and **3** — a retry can see the site is already live and skip straight to the callback instead of rebuilding, a success that was never delivered can be re-sent out-of-band, and a duplicate POST can be suppressed at the source |
 | Build history per site, and a place to file artifacts against | **5** — failed builds can be kept again, with retention driven by a real policy ("the last N per site") and indexed by something other than a directory listing |
 | An attempt counter persisted next to the job | The retry budget survives a broker restart, and a `consumer_timeout` requeue can be told apart from a genuine build failure — the thing that currently makes a slow render look like a failed one |
 | A per-build state column (`staged`, `swapped`, `reported`) | **6** — a build interrupted mid-swap is recoverable, because something records that it was mid-swap. This is the state the `.partial`/`.old` directory names used to stand in for |
