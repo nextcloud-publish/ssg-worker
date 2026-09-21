@@ -76,15 +76,7 @@ final class Filesystem
 
     /**
      * Recursively copies $from to $to preserving the modes of the source.
-     *
-     * File modes are preserved the same way, which takes an explicit chmod:
-     * copy() ignores the source entirely and creates the target at 0666 minus
-     * the umask. A faithful copy is this function's job; deciding what the
-     * published tree should look like is applyPermissions()'s.
-     *
-     * Symlinks are skipped, not followed or recreated: nothing that generates a site writes them,
-     * so one appearing means something is wrong, and copying it would either duplicate content or publish a link pointing out of the tree.
-     * Skipping is logged so it isn't silent.
+     * Symlinks are skipped, not followed or recreated. Skipping is logged because it's unexpected.
      *
      * @throws \RuntimeException if $from is not a directory, a directory cannot be created,
      *                           or a file cannot be copied
@@ -134,18 +126,8 @@ final class Filesystem
     /**
      * Recursively forces ownership and modes on $dir and everything under it.
      *
-     * The counterpart to copyDir(): that one reproduces a tree faithfully,
-     * this one decides what the result should look like. A published site has
-     * to be readable by whatever uid serves it, which is not the uid that
-     * built it, and the modes a build happens to carry -- from a tarball, from
-     * the worker's umask -- are not a decision anyone made.
-     *
      * $owner and $group default to null, meaning "leave alone". Setting either
      * needs CAP_CHOWN, so they only work where the worker runs as root.
-     *
-     * Throws rather than warning: the whole point is a tree the server can
-     * read, and a half-applied mode is the kind of failure that shows up as a
-     * 403 on every page rather than as an error.
      *
      * @throws \RuntimeException if $dir is not a directory, or any chmod/chown/chgrp fails
      */
@@ -170,8 +152,7 @@ final class Filesystem
         foreach ($entries as $entry) {
             \assert($entry instanceof \SplFileInfo);
 
-            // Skipped, not followed: chmod() and chown() act on a symlink's
-            // TARGET, so walking one would change something outside the tree.
+            // Skip symlinks avoiding jumping inside or outside the tree.
             if ($entry->isLink()) {
                 error_log(sprintf('[WARN] skipping symlink %s while setting permissions', $entry->getPathname()));
             } else {
@@ -181,6 +162,7 @@ final class Filesystem
     }
 
     /**
+     * Applies $mode, $owner, and $group to dir or file at $path.
      * @throws \RuntimeException if any of the three cannot be applied
      */
     private static function applyTo(string $path, int $mode, ?string $owner, ?string $group): void
