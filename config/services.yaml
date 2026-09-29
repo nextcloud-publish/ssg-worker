@@ -27,22 +27,79 @@ services:
         tags:
             - { name: messenger.message_handler, handles: App\Message\BuildJob, from_transport: builds }
 
+    # Every path the worker uses, and the checks that make queue payload values
+    # safe to use in them.
+    #
+    # The two roots may share a filesystem or be separate mounts, e.g. the
+    # published tree bind-mounted for an external nginx and build scratch on a
+    # named volume. rename() fails with EXDEV across mounts, so
+    # Filesystem::moveDir() falls back to copying. Staging inside PUBLISHED_DIR
+    # keeps the final swap a rename in both cases.
+    #
+    # No defaults, so a deployment without them fails instead of publishing
+    # somewhere nothing serves. Set in publish/docker/dev/compose.yaml.
     App\Job\JobWorkspace:
         arguments:
-            # Root of the volume shared with publish. No default: it must be
-            # the same directory publish uses, so a missing variable has to
-            # fail loudly rather than send builds somewhere nothing looks.
-            # Set in integration-test/docker-compose.yml.
-            $baseDir: '%env(JOB_STORAGE_DIR)%'
+            $buildTempDir: '%env(JOB_STORAGE_DIR)%'
+            $publishedDir: '%env(PUBLISHED_DIR)%'
+            # The public URL PUBLISHED_DIR is served at; publish_url in the callback
+            # is built from it as <base>/<static_site_id>/<slug>/.
+            $publishBaseUrl: '%env(PUBLISH_BASE_URL)%'
+
+    # Takes the same two roots to replace them with their names in a failure
+    # message before it is PUT to a client-supplied URL.
+    # An event subscriber through autoconfigure, not a message handler, so it has
+    # no messenger.message_handler tag.
+    App\Message\BuildFailureHandler:
+        arguments:
+            $buildTempDir: '%env(JOB_STORAGE_DIR)%'
+            $publishedDir: '%env(PUBLISHED_DIR)%'
+
+    App\Job\StatusNotifier:
+        arguments:
+            # callback_status_url comes from the API caller and is not validated
+            # upstream. NoPrivateNetworkHttpClient refuses requests to private
+            # addresses, including after redirects and DNS resolution. It is a
+            # separate service so ContentDownloader keeps the plain client.
+            $httpClient: '@app.http_client.no_private_network'
+            # The message stays unacked while the PUT runs, so these must stay
+            # well below consumer_timeout in rabbitmq.conf. Otherwise a slow
+            # endpoint causes a redelivery instead of a retry.
+            $timeoutSeconds: 5
+            $maxDurationSeconds: 10
+            # Redirects are not followed, so the result is only posted to the URL
+            # the client gave.
+            $maxRedirects: 0
+
+    app.http_client.no_private_network:
+        class: Symfony\Component\HttpClient\NoPrivateNetworkHttpClient
+        arguments: ['@http_client']
+
     App\Job\ContentDownloader:
         arguments:
-            # In megabytes. No fallback: the cap protects a volume shared with
-            # publish and every other job, so a deployment that forgets to set
-            # it should fail loudly rather than have a limit guessed for it.
-            # Set in integration-test/docker-compose.yml.
+            # In megabytes. No fallback: the cap stops one job filling the build
+            # volume shared by all jobs, so it must be set explicitly.
+            # Set in publish/docker/dev/compose.yaml.
             $maxMegabytes: '%env(int:MAX_DOWNLOAD_MB)%'
             # HTTP client tuning for fetching the content archive; see
             # ContentDownloader for what each one guards against.
             $maxDurationSeconds: 300
             $timeoutSeconds: 30
             $maxRedirects: 3
+
+when@dev:
+    services:
+        # The dev stack's callback endpoint (collectives-mock) has a private Docker address,
+        # which NoPrivateNetworkHttpClient refuses.
+        app.http_client.no_private_network:
+            alias: http_client
+
+when@test:
+    services:
+        # Public alias for a private service, so a test can check the retry
+        # strategy the container built rather than the YAML. It is the only
+        # offline test of max_retries, delay, multiplier and jitter, because
+        # InMemoryTransportFactory ignores every transport option.
+        test.retry_strategy.builds:
+            alias: messenger.retry.multiplier_retry_strategy.builds
+            public: true

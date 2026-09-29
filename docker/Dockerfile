@@ -2,7 +2,7 @@
 FROM php:8.5-cli-alpine
 
 # Symfony Messenger's AMQP transport is built on ext-amqp, which links against
-# rabbitmq-c -- not php-amqplib/ext-sockets, which this replaced.
+# rabbitmq-c.
 #
 # PIE, not `pecl install`: PECL is deprecated in favour of PIE (the PHP
 # Installer for Extensions). PIE replaces the download/build/enable
@@ -14,18 +14,34 @@ FROM php:8.5-cli-alpine
 # there is no `latest` tag to pull.
 COPY --from=ghcr.io/php/pie:bin /pie /usr/bin/pie
 
+# amqp and pcntl are built in one RUN because both compile against
+# $PHPIZE_DEPS, and `apk del .build-deps` below removes the compiler.
+# amqp is a PECL extension, so PIE downloads it. pcntl is part of PHP but
+# disabled by default, so docker-php-ext-install builds it from the base
+# image's /usr/src/php.tar.xz.
+#
+# pcntl lets messenger:consume shut down cleanly: Symfony installs its SIGTERM
+# handler only when function_exists('pcntl_signal'). Without it `docker stop`
+# kills the worker mid-build, the message is redelivered after
+# consumer_timeout, and RejectRedeliveredMessageMiddleware rejects it, which
+# uses one of the two build attempts.
+#
 # unzip is a PIE requirement rather than an amqp one: PIE downloads the
 # extension as a zip, and this base image ships neither unzip nor git to
-# unpack it.
+# unpack it. GNU tar is installed because ArchiveExtractor calls the tar
+# command via exec(), and busybox tar does not fully handle the pax and
+# long-path headers that Collectives exports can contain.
 #
-# The final `php -m` check fails the build here if the extension did not
+# The final `php -m` checks fail the build here if either extension did not
 # actually load, rather than letting composer install below report it as a
 # missing platform requirement.
-RUN apk add --no-cache rabbitmq-c \
+RUN apk add --no-cache rabbitmq-c tar \
     && apk add --no-cache --virtual .build-deps $PHPIZE_DEPS rabbitmq-c-dev unzip \
     && pie install --no-interaction --no-cache php-amqp/php-amqp \
+    && docker-php-ext-install -j"$(nproc)" pcntl \
     && apk del .build-deps \
-    && php -m | grep -qx amqp
+    && php -m | grep -qx amqp \
+    && php -m | grep -qx pcntl
 
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
@@ -45,4 +61,13 @@ WORKDIR /app
 COPY composer.json composer.lock* ./
 RUN composer install --no-interaction --no-progress --no-scripts
 
-CMD ["php", "bin/console", "messenger:consume", "builds", "-vv"]
+# --time-limit/--memory-limit make the worker exit after an hour or 512M, so a
+# memory leak cannot grow without bound. The container relies on a restart
+# policy (compose `restart:`) to start it again; without one it stops after an
+# hour.
+#
+# --memory-limit only takes effect if PHP's memory_limit is higher or
+# unlimited. Messenger checks its limit between messages, while PHP's limit is
+# a fatal error mid-build.
+CMD ["php", "bin/console", "messenger:consume", "builds", \
+     "--time-limit=3600", "--memory-limit=512M", "-vv"]
