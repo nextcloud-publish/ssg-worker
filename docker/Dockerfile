@@ -1,40 +1,14 @@
 # syntax=docker/dockerfile:1
 FROM php:8.5-cli-alpine
 
-# Symfony Messenger's AMQP transport is built on ext-amqp, which links against
-# rabbitmq-c.
-#
-# PIE, not `pecl install`: PECL is deprecated in favour of PIE (the PHP
-# Installer for Extensions). PIE replaces the download/build/enable
-# orchestration only -- the extension still compiles against the rabbitmq-c
-# headers, which is why rabbitmq-c-dev is here. The headers are build-time
-# only; the rabbitmq-c runtime library has to stay.
-#
-# PIE is published as a binary-only image tagged `bin` (latest) or `x.y.z-bin`;
-# there is no `latest` tag to pull.
+# PIE ships binary-only: tags are `bin` / `x.y.z-bin`, there is no `latest`.
 COPY --from=ghcr.io/php/pie:bin /pie /usr/bin/pie
 
-# amqp and pcntl are built in one RUN because both compile against
-# $PHPIZE_DEPS, and `apk del .build-deps` below removes the compiler.
-# amqp is a PECL extension, so PIE downloads it. pcntl is part of PHP but
-# disabled by default, so docker-php-ext-install builds it from the base
-# image's /usr/src/php.tar.xz.
-#
-# pcntl lets messenger:consume shut down cleanly: Symfony installs its SIGTERM
-# handler only when function_exists('pcntl_signal'). Without it `docker stop`
-# kills the worker mid-build, the message is redelivered after
-# consumer_timeout, and RejectRedeliveredMessageMiddleware rejects it, which
-# uses one of the two build attempts.
-#
-# unzip is a PIE requirement rather than an amqp one: PIE downloads the
-# extension as a zip, and this base image ships neither unzip nor git to
-# unpack it. GNU tar is installed because ArchiveExtractor calls the tar
-# command via exec(), and busybox tar does not fully handle the pax and
-# long-path headers that Collectives exports can contain.
-#
-# The final `php -m` checks fail the build here if either extension did not
-# actually load, rather than letting composer install below report it as a
-# missing platform requirement.
+# pcntl: Symfony installs its SIGTERM handler only when pcntl_signal exists,
+# otherwise `docker stop` kills the worker mid-build and burns a build attempt.
+# GNU tar: ArchiveExtractor shells out to tar, and busybox tar mishandles the
+# pax/long-path headers Collectives exports can carry.
+# unzip: PIE unpacks extensions from zip, and this base image has no unzip or git.
 RUN apk add --no-cache rabbitmq-c tar \
     && apk add --no-cache --virtual .build-deps $PHPIZE_DEPS rabbitmq-c-dev unzip \
     && pie install --no-interaction --no-cache php-amqp/php-amqp \
@@ -47,27 +21,14 @@ COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
 WORKDIR /app
 
-# CMD runs bin/console directly (there's no web server keeping the process
-# alive through a request-level error), so vendor/ has to exist before the
-# container starts, not just be installable on demand.
-#
-# --no-scripts: composer.json's post-install-cmd runs Flex's auto-scripts
-# (cache:clear, assets:install), which shell out to bin/console -- but only
-# composer.json/composer.lock are copied at this point, not the rest of the
-# source, so bin/console doesn't exist yet and those scripts fail the build.
-# Skipping them is harmless here: this is dev tooling behind a bind mount that
-# overrides /app at runtime anyway (only vendor/ is protected from it), and
-# the container already generates its own cache on first real boot.
+# --no-scripts: Flex's auto-scripts shell out to bin/console, not copied yet.
 COPY composer.json composer.lock* ./
 RUN composer install --no-interaction --no-progress --no-scripts
 
-# --time-limit/--memory-limit make the worker exit after an hour or 512M, so a
-# memory leak cannot grow without bound. The container relies on a restart
-# policy (compose `restart:`) to start it again; without one it stops after an
-# hour.
-#
-# --memory-limit only takes effect if PHP's memory_limit is higher or
-# unlimited. Messenger checks its limit between messages, while PHP's limit is
-# a fatal error mid-build.
+# The only difference from ./Dockerfile.dev, which gets its source from a mount.
+COPY . .
+
+# --memory-limit only applies if PHP's own memory_limit is higher; Messenger
+# checks between messages, PHP's limit is fatal mid-build.
 CMD ["php", "bin/console", "messenger:consume", "builds", \
      "--time-limit=3600", "--memory-limit=512M", "-vv"]

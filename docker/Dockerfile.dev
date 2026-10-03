@@ -1,0 +1,25 @@
+# syntax=docker/dockerfile:1
+
+# Dev variant of ./Dockerfile: no COPY of the source, the compose mounts it.
+FROM php:8.5-cli-alpine
+
+COPY --from=ghcr.io/php/pie:bin /pie /usr/bin/pie
+
+RUN apk add --no-cache rabbitmq-c tar \
+    && apk add --no-cache --virtual .build-deps $PHPIZE_DEPS rabbitmq-c-dev unzip \
+    && pie install --no-interaction --no-cache php-amqp/php-amqp \
+    && docker-php-ext-install -j"$(nproc)" pcntl \
+    && apk del .build-deps \
+    && php -m | grep -qx amqp \
+    && php -m | grep -qx pcntl
+
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+
+WORKDIR /app
+
+# Still baked in: compose's `- /app/vendor` keeps this visible under the mount.
+COPY composer.json composer.lock* ./
+RUN composer install --no-interaction --no-progress --no-scripts
+
+CMD ["php", "bin/console", "messenger:consume", "builds", \
+     "--time-limit=3600", "--memory-limit=512M", "-vv"]
