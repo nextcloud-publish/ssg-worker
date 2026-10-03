@@ -15,13 +15,18 @@ env:
   # The one supported PHP: what composer.json requires and what the
   # Dockerfile ships. Keep those three in step.
   PHP_VERSION: '8.5'
-  # MAX_DOWNLOAD_MB deliberately has no fallback (see config/services.yaml),
-  # so anything that compiles the container needs it resolvable. The value
-  # itself is irrelevant to linting and testing.
+  # None of these have a fallback (see config/services.yaml). lint:container
+  # skips the type check for any argument whose env var it cannot resolve
+  # (CheckTypeDeclarationsPass catches EnvNotFoundException) and still exits 0,
+  # so they must be set for the check to run. No test uses the values.
   MAX_DOWNLOAD_MB: "256"
-  # ctype/iconv are required by composer.json, sockets by php-amqplib, and
-  # mbstring/json by ssg-library. phar and zlib back the tar.gz handling.
-  PHP_EXTENSIONS: ctype, iconv, sockets, mbstring, json, phar, zlib
+  JOB_STORAGE_DIR: /tmp/ssg-ci/build_temp
+  PUBLISHED_DIR: /tmp/ssg-ci/published
+  PUBLISH_BASE_URL: http://sites.test
+  # ctype/iconv are required by composer.json; amqp by symfony/amqp-messenger,
+  # which declares "ext-amqp": "*", so `composer install` fails without it.
+  # mbstring/json are used by ssg-library. phar and zlib back the tar.gz handling.
+  PHP_EXTENSIONS: ctype, iconv, amqp, mbstring, json, phar, zlib
 
 jobs:
   lint:
@@ -110,11 +115,10 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
+          # The context stays the repo root, because the Dockerfile copies
+          # composer.json and composer.lock from it.
           context: .
-          # Root of the repo, not docker/: this repo keeps a single Dockerfile
-          # there. Naming a directory that does not exist fails in buildx
-          # ("lstat docker: no such file or directory"), not at checkout.
-          file: Dockerfile
+          file: docker/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
