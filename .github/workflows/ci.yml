@@ -2,30 +2,22 @@ name: CI
 
 on:
   pull_request:
+  push:
+    branches: [main]
 
-# A newer push to the same PR makes the run in flight irrelevant.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 env:
-  # The one supported PHP: what composer.json requires and what the
-  # Dockerfile ships. Keep those three in step.
   PHP_VERSION: '8.5'
-  # None of these have a fallback (see config/services.yaml). lint:container
-  # skips the type check for any argument whose env var it cannot resolve
-  # (CheckTypeDeclarationsPass catches EnvNotFoundException) and still exits 0,
-  # so they must be set for the check to run. No test uses the values.
   MAX_DOWNLOAD_MB: "256"
   JOB_STORAGE_DIR: /tmp/ssg-ci/build_temp
   PUBLISHED_DIR: /tmp/ssg-ci/published
   PUBLISH_BASE_URL: http://sites.test
-  # ctype/iconv are required by composer.json; amqp by symfony/amqp-messenger,
-  # which declares "ext-amqp": "*", so `composer install` fails without it.
-  # mbstring/json are used by ssg-library. phar and zlib back the tar.gz handling.
   PHP_EXTENSIONS: ctype, iconv, amqp, mbstring, json, phar, zlib
 
 jobs:
@@ -42,9 +34,6 @@ jobs:
           extensions: ${{ env.PHP_EXTENSIONS }}
           coverage: none
 
-      # Before installing, so a malformed manifest fails fast and cheaply.
-      # --no-check-publish: this is a deployable app, not a Packagist package,
-      # so it deliberately has no name or description to validate.
       - name: Validate composer.json
         run: composer validate --strict --no-check-publish
 
@@ -57,9 +46,6 @@ jobs:
       - name: Lint YAML config
         run: php bin/console lint:yaml config
 
-      # Catches arguments whose types do not match the constructors they are
-      # injected into -- the failure this app's hand-wired DI is most exposed
-      # to, and one no other check here would notice.
       - name: Lint service container
         run: php bin/console lint:container
 
@@ -79,14 +65,12 @@ jobs:
       - name: Install dependencies
         uses: ramsey/composer-install@v3
 
-      # ArchiveExtractor shells out to tar, which the runner image provides.
       - name: PHPUnit
         run: vendor/bin/phpunit
 
   image:
     name: Build and push image
     runs-on: ubuntu-latest
-    # Nothing gets published unless it lints and its tests pass.
     needs: [lint, test]
     permissions:
       contents: read
@@ -109,14 +93,12 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=ref,event=pr
-            type=sha,format=short
+            type=raw,value=${{ github.head_ref || github.ref_name }}
+          flavor: latest=false
 
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          # The context stays the repo root, because the Dockerfile copies
-          # composer.json and composer.lock from it.
           context: .
           file: docker/Dockerfile
           push: true
