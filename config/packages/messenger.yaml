@@ -3,116 +3,43 @@ framework:
     messenger:
         transports:
             builds:
-                # The same variable the publish API reads, rather than Flex's
-                # MESSENGER_TRANSPORT_DSN, so both services use one env var
-                # for the broker.
+                # Same env var and serializer as the publish API's transport.
                 dsn: '%env(AMQP_DSN)%'
-
-                # Matches the publish API's transport, which serializes to JSON
-                # with messenger.transport.symfony_serializer, so this side must
-                # decode the same way for the `type` header to resolve to a class.
                 serializer: messenger.transport.symfony_serializer
 
                 options:
-                    # The broker imports its topology from
-                    # publish/docker/rabbitmq-config/definitions.json at boot.
-                    #
-                    # Exception: with retry_strategy.delay > 0, Messenger declares
-                    # its delay queues at runtime, because their names contain the
-                    # delay. The `delays` exchange they bind to is not declared
-                    # here and must exist in definitions.json.
+                    # The broker imports its topology from publish/docker/rabbitmq-config/definitions.json,
+                    # including the `delays` exchange the retry delay queues bind to.
                     auto_setup: false
 
-                    # Must match `heartbeat` in
-                    # publish/docker/rabbitmq-config/rabbitmq.conf, otherwise an
-                    # idle connection is treated as dead.
-                    # Defaulted in .env: the when@test override below keeps this
-                    # node, so it must also resolve in kernel tests.
+                    # Must match `heartbeat` in publish/docker/rabbitmq-config/rabbitmq.conf.
                     heartbeat: '%env(int:AMQP_HEARTBEAT)%'
 
                     queues:
-                        # Required for consuming: without it the transport takes
-                        # the queue name from the DSN path, or "messages", and
-                        # listens on a queue that does not exist.
                         q.builds:
-                            # Does not declare the queue: auto_setup is off and
-                            # consuming never declares. countMessagesInQueues()
-                            # does call declareQueue(), so without this
-                            # `messenger:stats` declares q.builds as a classic
-                            # queue and fails with PRECONDITION_FAILED (406)
-                            # against the quorum queue from definitions.json.
+                            # Without it, `messenger:stats` declares q.builds as a classic queue and fails against the quorum queue.
                             arguments:
                                 x-queue-type: quorum
 
+                    # The default exchange, which routes by queue name.
                     exchange:
-                        # '' is the default exchange, which delivers to the queue
-                        # named by the routing key. Without it the DSN fallback is
-                        # a "messages" exchange that does not exist, which causes
-                        # two problems:
-                        #
-                        # 1. With `delay: 0`, a retry is published through this
-                        #    exchange, and publishing to a missing exchange is a
-                        #    404 that closes the channel.
-                        # 2. The exchange name is part of the delay queue name,
-                        #    which would become delay_messages_q.builds_15000_retry.
-                        #
-                        # Delayed retries do not use it: their dead-letter exchange
-                        # is always ''.
                         name: ''
                         default_publish_routing_key: q.builds
 
                 retry_strategy:
-                    # One retry, so two build attempts in total.
-                    # isRetryable() is `$retries < $maxRetries`, so after the
-                    # second failure willRetry() is false and BuildFailureHandler
-                    # reports `failed` to the client.
-                    #
-                    # Known limitation: a redelivery also counts as a failed
-                    # attempt. A message requeued after consumer_timeout comes back
-                    # with the AMQP redelivered flag, and
-                    # RejectRedeliveredMessageMiddleware throws before the handler
-                    # runs. A site that renders for longer than consumer_timeout is
-                    # therefore reported failed without finishing.
+                    # Two build attempts in total. A redelivery after consumer_timeout also counts as one.
                     max_retries: 1
-
-                    # Requires the `delays` direct exchange in
-                    # publish/docker/rabbitmq-config/definitions.json. With
-                    # auto_setup off the transport does not declare it, but still
-                    # binds its delay queues to it. A bind to a missing exchange is
-                    # a 404 thrown inside Worker::ack(), where nothing catches it,
-                    # so the consumer exits. No test covers this: the in-memory
-                    # transport ignores every option here.
-                    #
-                    # 15s is long enough for a short outage (a 503 from the content
-                    # API, brief disk pressure) to pass, and short enough that the
-                    # client is still waiting for the result.
                     delay: 15000
-
-                    # No effect with a single retry. Set so that a higher
-                    # max_retries waits 15s, then at most 60s per attempt.
                     multiplier: 4
                     max_delay: 60000
-
-                    # 0 instead of the framework default of 0.1. The delay is part
-                    # of the delay queue name, so with jitter every message and
-                    # attempt declares its own classic queue. They expire, but they
-                    # fill the management UI. At 0 there are exactly two.
+                    # The delay is part of the delay queue name, so jitter would declare a new queue per attempt.
                     jitter: 0
 
-                # No failure_transport: on the last attempt the handler reports
-                # `failed` and acks, so no message is left to store. A failure
-                # transport would also need its own fanout exchange, because a
-                # message sent to it keeps its routing key and would be delivered
-                # back to q.builds.
+                # No failure_transport: on the last attempt BuildFailureHandler reports `failed` and the message is acked.
 
 when@test:
     framework:
         messenger:
             transports:
-                # No broker in tests. The scalar becomes {dsn: 'in-memory://'}
-                # and is merged over the block above, so options and
-                # retry_strategy are kept and AMQP_HEARTBEAT must still resolve.
-                #
-                # InMemoryTransportFactory::createTransport() ignores options, so
-                # no test covers anything under `options:` above.
+                # No broker in tests. Merged over the block above, so `options` must still resolve.
                 builds: 'in-memory://'
