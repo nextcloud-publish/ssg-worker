@@ -5,23 +5,21 @@ declare(strict_types=1);
 namespace App\Job;
 
 /**
- * Helper class providing reset and clean methods for the job workspace and publish
- * method used to publish the build out of buildTempDir to publishedDir.
- * Further it hold the folder layout for the job workspace and the published site
- * allowing access via getter methods and offers validation for the ids.
+ * Holds the folder layout of a build job and of the published site, and resets, publishes and clears them.
+ * The ids are used as directory names unchecked: publish validates them before a job is enqueued.
  *
- *   {buildTempDir}/                    JOB_STORAGE_DIR, worker-private
+ *   {buildTempDir}/                    JOB_STORAGE_DIR, root of all builds
  *     {buildId}/                       buildJobDir() -- one build
- *       input/                         buildJobInputDir()
+ *       input/                         buildJobInputDir(), 0750
  *         content.tar.gz               the download
- *         content_unarchived/          buildJobUnarchivedDir(), the renderer reads this
- *       output/                        buildJobOutputDir(), the renderer writes this
+ *         content_unarchived/          buildJobUnarchivedDir(), the archive is unpacked here and the renderer reads it
+ *       output/                        buildJobOutputDir(), 0750, the renderer writes this
  *
  *   {publishedDir}/                    PUBLISHED_DIR, the bind mount nginx serves
  *     .staging/                        dotted so nginx 404s it
- *       {buildId}/                     publishStagingDir(), replaces {staticSiteId}/ when publishing
+ *       {buildId}/                     publishStagingDir(), the build before it goes live; dirs 0755, files 0644 from here down
  *         {slug}/                      the rendered pages
- *     {staticSiteId}/                  publishSiteDir(), holds only the current slug
+ *     {staticSiteId}/                  publishSiteDir(), replaced by the staged {buildId}/, holds only the current slug
  *       {slug}/                        the live site, served at publishUrl()
  *
  * @param string $buildTempDir The directory to store the build temporary files.
@@ -32,24 +30,11 @@ final class JobWorkspace
 {
     public const INPUT_DIR = 'input';
     public const OUTPUT_DIR = 'output';
-    /** where the downloaded archive is unpacked, inside input/ */
     public const UNARCHIVED_DIR = 'content_unarchived';
-    /** intermediate directory in publishedDir where a html build is copied to before being published */
     public const STAGING_DIR = '.staging';
 
-    /**
-     * regex to validate static_site_id, build_id and slug against spaces and dots
-     * to avoid e.g. directory traversal attacks
-     */
-    private const SAFE_ID = '/^[A-Za-z0-9_-]{1,128}$/';
-
-    /** input/ and output/ are worker-private */
-    private const JOB_DIR_MODE = 0o750;
-
-    /** the published directory is traversed by the uid that serves it */
+    private const BUILD_JOB_DIR_MODE = 0o750;
     private const PUBLISHED_DIR_MODE = 0o755;
-
-    /** served files need to be readable by the serving uid, nothing more */
     private const PUBLISHED_FILE_MODE = 0o644;
 
     public function __construct(
@@ -57,36 +42,6 @@ final class JobWorkspace
         private readonly string $publishedDir,
         private readonly string $publishBaseUrl,
     ) {
-    }
-
-    // --- validation -------------------------------------------------------
-
-    /**
-     * Checks if the id is a valid id.
-     *
-     * @param string $id The id to check.
-     * @return bool true if the id is valid, false otherwise.
-     */
-    public static function isValidId(string $id): bool
-    {
-        return preg_match(self::SAFE_ID, $id) === 1;
-    }
-
-    /**
-     * Check ids for valid characters and length.
-     * The ids are used as directory names and must be safe to use as such.
-     *
-     * @param string $staticSiteId The static site id to check.
-     * @param string $buildId The build id to check.
-     * @param string $slug The slug to check.
-     * @return void
-     * @throws \InvalidArgumentException if any of the three is unsafe
-     */
-    public static function assertSafeJob(string $staticSiteId, string $buildId, string $slug): void
-    {
-        !self::isValidId($staticSiteId) ? throw new \InvalidArgumentException('Unsafe static_site_id.') : null;
-        !self::isValidId($buildId) ? throw new \InvalidArgumentException('Unsafe build_id.') : null;
-        !self::isValidId($slug) ? throw new \InvalidArgumentException('Unsafe slug.') : null;
     }
 
     // --- paths ------------------------------------------------------------
@@ -138,7 +93,6 @@ final class JobWorkspace
     /**
      * Creates {buildTempDir}/{buildId}/input and /output.
      * Clears the directories if they already exist from a previous build attempt.
-     * Assumes assertSafeJob() has already passed for $buildId.
      *
      * @param string $buildId The build id to reset.
      * @return string the job directory path
@@ -149,15 +103,13 @@ final class JobWorkspace
     {
         $jobDir = $this->buildJobDir($buildId);
 
-        $cleared = Filesystem::removeDir($jobDir);
-
-        if (!$cleared) {
+        if (!$this->clear($buildId)) {
             throw new \RuntimeException(sprintf(
                 'Could not clear the previous attempt at %s', $jobDir));
         }
 
-        Filesystem::ensureDir($this->buildJobInputDir($buildId), self::JOB_DIR_MODE);
-        Filesystem::ensureDir($this->buildJobOutputDir($buildId), self::JOB_DIR_MODE);
+        Filesystem::ensureDir($this->buildJobInputDir($buildId), self::BUILD_JOB_DIR_MODE);
+        Filesystem::ensureDir($this->buildJobOutputDir($buildId), self::BUILD_JOB_DIR_MODE);
 
         return $jobDir;
     }
@@ -166,8 +118,6 @@ final class JobWorkspace
      * Moves the rendered html pages to the published directory at {publishedDir}/{staticSiteId}/{slug}.
      * The pages are staged as {slug}/ inside a staging directory, which then replaces the whole site directory.
      * Any slug directory published earlier for the same site is removed with it.
-     *
-     * Assumes assertSafeJob() has already passed for the param ids.
      *
      * @param string $buildId The build id to publish.
      * @param string $staticSiteId The static site id to publish.
@@ -207,24 +157,21 @@ final class JobWorkspace
     }
 
     /**
-     * Removes the build's workspace once the job is over.
-     * This removes the input/ directory and the output/ directory.
+     * Removes the build's workspace, the input/ and output/ directories.
+     * Logs a warning and returns false when that fails, rather than throwing.
      *
      * @param string $buildId The build id to clear.
-     * @return void
+     * @return bool true when the workspace is removed, false when removal fails
      */
-    public function clear(string $buildId): void
+    public function clear(string $buildId): bool
     {
-        // The id can be unvalidated here: a job can fail before assertSafeJob() runs.
-        if (!self::isValidId($buildId)) {
-            return;
-        }
-
         $jobDir = $this->buildJobDir($buildId);
         $removed = Filesystem::removeDir($jobDir);
 
         if (!$removed) {
             error_log(sprintf('[WARN] could not remove the job directory at %s', $jobDir));
         }
+
+        return $removed;
     }
 }

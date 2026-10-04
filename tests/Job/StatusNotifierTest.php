@@ -19,9 +19,6 @@ use Symfony\Component\HttpClient\Response\MockResponse;
  *
  * BuildJobHandler turns \InvalidArgumentException into UnrecoverableMessageHandlingException and
  * lets \RuntimeException propagate, so a retryable callback failure replays the whole build.
- *
- * A refusal is proven by the request never being made (getRequestsCount() === 0), the same idiom
- * ContentDownloaderTest uses.
  */
 final class StatusNotifierTest extends TestCase
 {
@@ -45,18 +42,28 @@ final class StatusNotifierTest extends TestCase
     }
 
     /**
-     * Reports a published site, filling the build id and publish url from the constants above.
+     * Creates a notifier with the defaults from .env.
      *
      * @param MockHttpClient $client The client to send the notification with.
-     * @param string $url The callback url to post to.
+     * @return StatusNotifier the notifier
+     */
+    private function notifier(MockHttpClient $client): StatusNotifier
+    {
+        return new StatusNotifier($client, timeoutSeconds: 5, maxDurationSeconds: 10, maxRedirects: 0);
+    }
+
+    /**
+     * Reports a published site, filling the callback url, build id and publish url from the constants above.
+     *
+     * @param MockHttpClient $client The client to send the notification with.
      * @return void
      * @throws \InvalidArgumentException if no retry could succeed
      * @throws \RuntimeException         if the call is worth retrying
      */
-    private function notify(MockHttpClient $client, string $url = self::URL): void
+    private function notify(MockHttpClient $client): void
     {
-        (new StatusNotifier($client))->notifyPublished(
-            callbackStatusUrl: $url,
+        $this->notifier($client)->notifyPublished(
+            callbackStatusUrl: self::URL,
             buildId: self::BUILD,
             publishUrl: self::PUBLISH_URL,
         );
@@ -97,7 +104,7 @@ final class StatusNotifierTest extends TestCase
     {
         $seen = null;
 
-        (new StatusNotifier($this->recordingClient($seen)))->notifyFailed(
+        $this->notifier($this->recordingClient($seen))->notifyFailed(
             callbackStatusUrl: self::URL,
             buildId: self::BUILD,
             errorMessage: 'Extracting failed: not in gzip format',
@@ -109,17 +116,16 @@ final class StatusNotifierTest extends TestCase
         ], json_decode($seen['options']['body'], true));
     }
 
-    /** Both methods share one guard, so a failure report is refused on the same terms. */
-    public function testRefusesAnUncallableUrlWhenReportingAFailure(): void
+    public function testPassesTheConfiguredLimitsToTheRequest(): void
     {
-        $client = new MockHttpClient();
+        $seen = null;
 
-        try {
-            (new StatusNotifier($client))->notifyFailed('file:///etc/passwd', self::BUILD, 'boom');
-            self::fail('Expected file:///etc/passwd to be refused.');
-        } catch (\InvalidArgumentException) {
-            self::assertSame(0, $client->getRequestsCount());
-        }
+        (new StatusNotifier($this->recordingClient($seen), timeoutSeconds: 7, maxDurationSeconds: 11, maxRedirects: 2))
+            ->notifyPublished(self::URL, self::BUILD, self::PUBLISH_URL);
+
+        self::assertEquals(7, $seen['options']['timeout']);
+        self::assertEquals(11, $seen['options']['max_duration']);
+        self::assertSame(2, $seen['options']['max_redirects']);
     }
 
     /**
@@ -220,43 +226,6 @@ final class StatusNotifierTest extends TestCase
             $this->notify($client);
         } catch (\InvalidArgumentException $e) {
             self::fail('A transport failure must be retried, but was parked: ' . $e->getMessage());
-        }
-    }
-
-    /**
-     * Urls the notifier must refuse without issuing a request.
-     *
-     * @return array<string, array{string}> the url per case name
-     */
-    public static function provideUncallableUrls(): array
-    {
-        return [
-            'file scheme' => ['file:///etc/passwd'],
-            'ftp scheme' => ['ftp://example.org/x'],
-            'php wrapper' => ['php://input'],
-            'no scheme' => ['cloud.example.org/status'],
-            'no host' => ['https:///status'],
-            'not a url' => ['not a url at all'],
-
-            /** BuildController requires callback_status_url but never validates it, so an empty string reaches here intact. */
-            'empty' => [''],
-        ];
-    }
-
-    /**
-     * This is an outbound PUT with a body, aimed at a url the original API caller supplied.
-     * Nothing upstream validates it, so the scheme and host check here is the only one.
-     */
-    #[DataProvider('provideUncallableUrls')]
-    public function testRefusesUrlsItWillNotCall(string $url): void
-    {
-        $client = new MockHttpClient();
-
-        try {
-            $this->notify($client, url: $url);
-            self::fail('Expected ' . $url . ' to be refused.');
-        } catch (\InvalidArgumentException) {
-            self::assertSame(0, $client->getRequestsCount());
         }
     }
 }

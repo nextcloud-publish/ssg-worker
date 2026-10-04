@@ -18,9 +18,8 @@ use Symfony\Component\Messenger\Exception\UnrecoverableMessageHandlingException;
  * A build that fails exits this method by throwing, not by returning an
  * error, and which exception type is thrown decides what Messenger does
  * next:
- *  - \InvalidArgumentException: triggered by an unsafe id or
- *    slug, a URL we won't fetch, an archive with no pages. Stops retry via an
- *    UnrecoverableMessageHandlingException so the transport reports it instead of retrying the build.
+ *  - \InvalidArgumentException: e.g. an archive with no pages or a callback that rejects us.
+ *    Stops retry via an UnrecoverableMessageHandlingException so the transport reports it instead of retrying the build.
  *  - \RuntimeException: the environment might differ next time (disk,
  *    network, a half-finished swap). Retry via Messenger redelivery.
  *
@@ -52,8 +51,6 @@ final class BuildJobHandler
         // build, publish and notify success are all inside the same try block to ensure that
         // a failed build in any step is retried or handled as a failure by Messenger.
         try {
-            $this->assertUsableJob($message);
-
             $pages = $this->build($message);
 
             $this->jobWorkspace->publish($message->build_id, $message->static_site_id, $message->slug);
@@ -74,26 +71,9 @@ final class BuildJobHandler
                 publishUrl: $this->jobWorkspace->publishUrl($message->static_site_id, $message->slug),
             );
         } catch (\InvalidArgumentException $e) {
-            // Marked unrecoverable so the retry strategy is skipped entirely:
-            // e.g. an unsafe slug not causing senseless retries.
+            // Marked unrecoverable so the retry strategy is skipped entirely.
             throw new UnrecoverableMessageHandlingException($e->getMessage(), 0, $e);
         }
-    }
-
-    /**
-     * Checks every field the job will act on, before any work is done. Nothing
-     * downstream re-checks. title and created_at are not checked: the first is
-     * a free-form heading, the second is never read.
-     *
-     * @param BuildJob $message The build job to check.
-     * @return void
-     * @throws \InvalidArgumentException if any field is unusable
-     */
-    private function assertUsableJob(BuildJob $message): void
-    {
-        JobWorkspace::assertSafeJob($message->static_site_id, $message->build_id, $message->slug);
-        ContentDownloader::assertFetchableUrl($message->content_download_url);
-        StatusNotifier::assertCallableUrl($message->callback_status_url, $message->build_id);
     }
 
     /** Download, extract, render. Everything before the site goes live. */

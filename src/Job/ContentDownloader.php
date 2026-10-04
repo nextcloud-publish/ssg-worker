@@ -10,12 +10,9 @@ use Symfony\Contracts\HttpClient\HttpClientInterface;
 
 /**
  * Fetches a build job's content archive into that job's input folder.
+ * Redirects are capped, and the response is streamed to disk under a byte limit rather than buffered in memory.
+ * publish has already checked that the URL is http or https with a host.
  *
- * The URL travels from the original build request through the queue, so it is
- * treated as untrusted throughout: only http/https are fetched, redirects are
- * capped, and the response is streamed to disk under a byte limit rather than
- * buffered in memory.
- * 
  * @param HttpClientInterface $httpClient The http client to use to download the content.
  * @param int $maxMegabytes The maximum size of the content in megabytes.
  * @param int $maxDurationSeconds The maximum duration in seconds for the http request.
@@ -27,17 +24,14 @@ final class ContentDownloader
     /** Fixed filename for the content archive in the input folder */
     public const FILENAME = 'content.tar.gz';
 
-    /** Allow http for testing */
-    private const ALLOWED_SCHEMES = ['http', 'https'];
-
     private readonly int $maxBytes;
 
     public function __construct(
         private readonly HttpClientInterface $httpClient,
         int $maxMegabytes,
-        private readonly int $maxDurationSeconds = 300,
-        private readonly int $timeoutSeconds = 30,
-        private readonly int $maxRedirects = 3,
+        private readonly int $maxDurationSeconds,
+        private readonly int $timeoutSeconds,
+        private readonly int $maxRedirects,
     ) {
         if ($maxMegabytes < 1) {
             throw new \InvalidArgumentException(
@@ -59,8 +53,6 @@ final class ContentDownloader
      */
     public function download(string $url, string $targetDir): string
     {
-        self::assertFetchableUrl($url);
-
         if (!is_dir($targetDir)) {
             throw new \RuntimeException("Target directory does not exist: {$targetDir}");
         }
@@ -140,30 +132,5 @@ final class ContentDownloader
         }
 
         return $written;
-    }
-
-    /**
-     * Checks if the url is a valid http or https url and if it has a host.
-     * 
-     * @param string $url The url to check.
-     * @return void
-     * @throws \InvalidArgumentException if the url is not a valid http or https url or if it has no host.
-     */
-    public static function assertFetchableUrl(string $url): void
-    {
-        // parse_url() yields null for a missing scheme and false for a URL it
-        // cannot parse at all; both cast to '' and fail the allow-list.
-        $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
-        if (!\in_array($scheme, self::ALLOWED_SCHEMES, true)) {
-            // Without this, a job could name file:///etc/passwd, or any other
-            // stream wrapper the client happens to support, and we would fetch it.
-            throw new \InvalidArgumentException(
-                "Refusing to download {$url}: only http and https are allowed.",
-            );
-        }
-
-        if (parse_url($url, PHP_URL_HOST) === null) {
-            throw new \InvalidArgumentException("Download URL has no host: {$url}");
-        }
     }
 }

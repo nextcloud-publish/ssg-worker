@@ -10,9 +10,7 @@ namespace App\Job;
  * non-ASCII filenames Collectives exports contain.
  * The archive is assumed to be a gzipped tar; nothing validates that before the tar command is called.
  *
- * Does not guard against a hostile archive -- path traversal, symlinks and decompression bombs all pass.
- * That's tolerable only because ContentDownloader limits where an archive may come from (http/https, size-capped);
- * everything inside one is trusted completely.
+ * Known limitation: does not guard against a hostile archive -- path traversal, symlinks and decompression bombs all pass.
  */
 final class ArchiveExtractor
 {
@@ -29,7 +27,7 @@ final class ArchiveExtractor
 
     /**
      * Unpacks a job's downloaded content archive into $targetDir, creating it if needed.
-     * 
+     *
      * @param string $archive The archive to extract.
      * @param string $targetDir The directory to extract the archive to.
      * @return void

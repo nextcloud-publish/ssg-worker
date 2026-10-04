@@ -72,14 +72,6 @@ final class SiteRendererTest extends TestCase
         self::assertFileExists($this->outputDir . '/theme.js');
     }
 
-    public function testThrowsWhenThePagesDirectoryIsMissing(): void
-    {
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('Pages directory not found');
-
-        (new SiteRenderer())->render($this->tmp . '/nope', $this->outputDir, 'my_collective');
-    }
-
     /**
      * InvalidArgumentException, not RuntimeException, and the retry budget turns on the difference.
      * An archive with no pages renders the same nothing however often it is fetched, so the client is told at once.
@@ -90,7 +82,7 @@ final class SiteRendererTest extends TestCase
         mkdir($empty, 0o755, true);
 
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('no Markdown pages');
+        $this->expectExceptionMessage('no .md file found');
 
         (new SiteRenderer())->render($empty, $this->outputDir, 'my_collective');
     }

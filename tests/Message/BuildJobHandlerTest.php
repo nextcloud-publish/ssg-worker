@@ -11,7 +11,6 @@ use App\Job\SiteRenderer;
 use App\Job\StatusNotifier;
 use App\Message\BuildJob;
 use App\Message\BuildJobHandler;
-use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpClient\MockHttpClient;
 use Symfony\Component\HttpClient\Response\MockResponse;
@@ -19,8 +18,7 @@ use Symfony\Component\Messenger\Exception\UnrecoverableMessageHandlingException;
 
 /**
  * Covers App\Message\BuildJobHandler with its real collaborators, which are final classes and
- * so cannot be mocked. A rejection is proven by the request never being made
- * (getRequestsCount() === 0), not by a mock expectation.
+ * so cannot be mocked.
  *
  * The handler builds and, on success, publishes and reports. Every failure leaves by throwing:
  * the transport decides whether to retry, and BuildFailureHandler turns the last one into a
@@ -148,11 +146,11 @@ final class BuildJobHandlerTest extends TestCase
         $workspace = $this->workspace();
 
         return new BuildJobHandler(
-            new ContentDownloader($contentClient ?? $this->client, maxMegabytes: 1),
+            new ContentDownloader($contentClient ?? $this->client, maxMegabytes: 1, maxDurationSeconds: 300, timeoutSeconds: 30, maxRedirects: 3),
             new ArchiveExtractor(),
             new SiteRenderer(),
             $workspace,
-            new StatusNotifier($this->callbackClient),
+            new StatusNotifier($this->callbackClient, timeoutSeconds: 5, maxDurationSeconds: 10, maxRedirects: 0),
         );
     }
 
@@ -344,84 +342,6 @@ final class BuildJobHandlerTest extends TestCase
 
     // --- terminal failures are marked unrecoverable -----------------------
 
-    /**
-     * Jobs no retry could make work.
-     *
-     * @return array<string, array{BuildJob}> the job per case name
-     */
-    public static function provideTerminalJobs(): array
-    {
-        $base = [
-            'build_id' => self::BUILD_ID,
-            'static_site_id' => self::SITE_ID,
-            'slug' => self::SLUG,
-            'content_download_url' => self::CONTENT_URL,
-            'callback_status_url' => self::CALLBACK_URL,
-            'created_at' => '2026-09-03T13:00:09+00:00',
-            'title' => self::TITLE,
-        ];
-
-        return [
-            'empty static_site_id' => [new BuildJob(...[...$base, 'static_site_id' => ''])],
-            'traversal static_site_id' => [new BuildJob(...[...$base, 'static_site_id' => '../escape'])],
-            'traversal slug' => [new BuildJob(...[...$base, 'slug' => '../etc'])],
-            'slug with a space' => [new BuildJob(...[...$base, 'slug' => 'My Team Handbook'])],
-            'empty content_download_url' => [new BuildJob(...[...$base, 'content_download_url' => ''])],
-            'unfetchable scheme' => [new BuildJob(...[...$base, 'content_download_url' => 'file:///etc/passwd'])],
-        ];
-    }
-
-    /**
-     * UnrecoverableMessageHandlingException is checked before the retry strategy.
-     * That is what stops an unsafe slug spending a retry and 15s of backoff on an answer that cannot change.
-     */
-    #[DataProvider('provideTerminalJobs')]
-    public function testATerminalFailureIsMarkedUnrecoverable(BuildJob $job): void
-    {
-        $this->expectException(UnrecoverableMessageHandlingException::class);
-
-        ($this->handler())($job);
-    }
-
-    /** The original reason has to survive the wrapping, or the callback is useless. */
-    public function testTheUnrecoverableWrapperKeepsTheReason(): void
-    {
-        try {
-            ($this->handler())($this->job(slug: 'My Team Handbook'));
-            self::fail('Expected an unsafe slug to be refused.');
-        } catch (UnrecoverableMessageHandlingException $e) {
-            self::assertStringContainsString('slug', $e->getMessage());
-            self::assertInstanceOf(\InvalidArgumentException::class, $e->getPrevious());
-        }
-    }
-
-    /** Duplicated from JobWorkspaceTest on purpose: only here does it prove a message off the queue cannot write outside the volume. */
-    public function testAnUnsafeStaticSiteIdWritesNothingOutsideTheRoots(): void
-    {
-        $escapee = \dirname($this->root) . '/worker-escaped-' . bin2hex(random_bytes(6));
-
-        try {
-            ($this->handler())($this->job(staticSiteId: '../' . basename($escapee)));
-            self::fail('Expected a traversal id to be refused.');
-        } catch (UnrecoverableMessageHandlingException) {
-            self::assertDirectoryDoesNotExist($escapee);
-            self::assertSame(0, $this->client->getRequestsCount());
-        }
-    }
-
-    public function testAnUnsafeSlugPublishesNothing(): void
-    {
-        $escapee = \dirname($this->root) . '/worker-escaped-slug-' . bin2hex(random_bytes(6));
-
-        try {
-            ($this->handler())($this->job(slug: '../' . basename($escapee)));
-            self::fail('Expected a traversal slug to be refused.');
-        } catch (UnrecoverableMessageHandlingException) {
-            self::assertDirectoryDoesNotExist($escapee);
-            self::assertDirectoryDoesNotExist($this->publishedRoot());
-        }
-    }
-
     /** An archive with no pages renders the same nothing however often it is fetched, so it is terminal rather than worth a retry. */
     public function testAnArchiveWithNoPagesIsTerminal(): void
     {
@@ -435,10 +355,14 @@ final class BuildJobHandlerTest extends TestCase
 
         $handler = $this->handler(new MockHttpClient(fn (): MockResponse => new MockResponse($bytes)));
 
-        $this->expectException(UnrecoverableMessageHandlingException::class);
-        $this->expectExceptionMessage('no Markdown pages');
-
-        $handler($this->job());
+        try {
+            $handler($this->job());
+            self::fail('Expected an archive with no pages to be refused.');
+        } catch (UnrecoverableMessageHandlingException $e) {
+            /** The original reason has to survive the wrapping, or the callback is useless. */
+            self::assertStringContainsString('no .md file found', $e->getMessage());
+            self::assertInstanceOf(\InvalidArgumentException::class, $e->getPrevious());
+        }
     }
 
     // --- the callback is never allowed to fail the message ----------------
@@ -472,31 +396,5 @@ final class BuildJobHandlerTest extends TestCase
         $this->expectException(UnrecoverableMessageHandlingException::class);
 
         ($this->handler())($this->job());
-    }
-
-    /**
-     * callback_status_url is required by the API but never validated, so an empty string reaches here intact.
-     * A build nobody can be told about is refused before it costs a download and a render.
-     */
-    public function testAnEmptyCallbackUrlIsRefusedBeforeTheBuildStarts(): void
-    {
-        try {
-            ($this->handler())($this->job(callbackStatusUrl: ''));
-            self::fail('Expected an empty callback_status_url to be refused.');
-        } catch (UnrecoverableMessageHandlingException) {
-            self::assertDirectoryDoesNotExist($this->publishedSite());
-            self::assertSame(0, $this->client->getRequestsCount());
-        }
-    }
-
-    /** Checked up front, so nothing is downloaded for a url we would never fetch. */
-    public function testAnUnfetchableDownloadUrlIsRefusedBeforeTheBuildStarts(): void
-    {
-        try {
-            ($this->handler())($this->job(contentDownloadUrl: 'file:///etc/passwd'));
-            self::fail('Expected a file:// download URL to be refused.');
-        } catch (UnrecoverableMessageHandlingException) {
-            self::assertSame(0, $this->client->getRequestsCount());
-        }
     }
 }

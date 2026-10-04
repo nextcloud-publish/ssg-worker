@@ -13,10 +13,8 @@ use Symfony\Component\Messenger\Event\WorkerMessageFailedEvent;
  * Handles the failure of a build by clearing the job workspace and notifying the status callback.
  * Via the getSubscribedEvents method it subscribes to the WorkerMessageFailedEvent to handle build failures with the onMessageFailed method.
  * Setting a low priority ensures that the message is handled after the SendFailedMessageForRetryListener has had a chance to set the retry flag.
- * 
  * Before sending the notification the error message is redacted to strip out any sensitive information.
- * 
- * 
+ *
  * @param JobWorkspace $jobWorkspace The job workspace helper class.
  * @param StatusNotifier $notifier The notifier to use to notify the status callback.
  * @param string $buildTempDir The build temp directory.

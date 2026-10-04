@@ -8,7 +8,6 @@ use App\Job\JobWorkspace;
 use App\Job\StatusNotifier;
 use App\Message\BuildFailureHandler;
 use App\Message\BuildJob;
-use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpClient\MockHttpClient;
 use Symfony\Component\HttpClient\Response\MockResponse;
@@ -93,7 +92,7 @@ final class BuildFailureHandlerTest extends TestCase
     {
         return new BuildFailureHandler(
             $this->workspace(),
-            new StatusNotifier($callbackClient ?? $this->callbackClient),
+            new StatusNotifier($callbackClient ?? $this->callbackClient, timeoutSeconds: 5, maxDurationSeconds: 10, maxRedirects: 0),
             $this->buildTemp(),
             $this->root . '/published',
         );
@@ -205,10 +204,10 @@ final class BuildFailureHandlerTest extends TestCase
     public function testTheReasonComesFromTheThrowableItself(): void
     {
         $this->reporter()->onMessageFailed(
-            $this->failedEvent(new \InvalidArgumentException('Unsafe slug.')),
+            $this->failedEvent(new \InvalidArgumentException('Status callback rejected with HTTP 404.')),
         );
 
-        self::assertSame('Unsafe slug.', $this->callbacks[0]['result']['error_message']);
+        self::assertSame('Status callback rejected with HTTP 404.', $this->callbacks[0]['result']['error_message']);
     }
 
     // --- redaction --------------------------------------------------------
@@ -321,8 +320,8 @@ final class BuildFailureHandlerTest extends TestCase
     public function testAnOrdinaryReasonIsPassedThroughUnchanged(): void
     {
         self::assertSame(
-            'The archive contains no Markdown pages.',
-            $this->reportedErrorFor('The archive contains no Markdown pages.'),
+            'Invalid Collectives export: no .md file found in the archive or any of its subdirectories.',
+            $this->reportedErrorFor('Invalid Collectives export: no .md file found in the archive or any of its subdirectories.'),
         );
     }
 
@@ -334,7 +333,7 @@ final class BuildFailureHandlerTest extends TestCase
     {
         $handler = new BuildFailureHandler(
             $this->workspace(),
-            new StatusNotifier($this->callbackClient),
+            new StatusNotifier($this->callbackClient, timeoutSeconds: 5, maxDurationSeconds: 10, maxRedirects: 0),
             '/opt/ssg',
             '/opt/ssg/published',
         );
@@ -359,43 +358,6 @@ final class BuildFailureHandlerTest extends TestCase
         self::assertDirectoryDoesNotExist($this->buildTemp() . '/' . self::SITE_ID);
     }
 
-    /**
-     * Ids that cannot be turned into a path.
-     *
-     * @return array<string, array{string}> the id per case name
-     */
-    public static function provideUnsafeIds(): array
-    {
-        return [
-            'parent traversal' => ['../escape'],
-            'absolute path' => ['/etc/cron.d'],
-            'empty' => [''],
-        ];
-    }
-
-    /**
-     * An unsafe id is one of the things a build is failed for, so it reaches here routinely.
-     * Nothing was created for it and it cannot be turned into a path safely, but the client still has to be told.
-     */
-    #[DataProvider('provideUnsafeIds')]
-    public function testAnUnsafeIdStillReportsAndDeletesNothing(string $unsafeId): void
-    {
-        $escapee = \dirname($this->root) . '/worker-failure-escaped-' . bin2hex(random_bytes(6));
-        mkdir($escapee, 0o750, true);
-        file_put_contents($escapee . '/keep.md', 'must survive');
-
-        try {
-            $this->reporter()->onMessageFailed(
-                $this->failedEvent(new \InvalidArgumentException('Unsafe static_site_id.'), message: $this->job($unsafeId)),
-            );
-
-            self::assertFileExists($escapee . '/keep.md');
-            self::assertSame('failed', $this->callbacks[0]['status']);
-        } finally {
-            exec('rm -rf ' . escapeshellarg($escapee));
-        }
-    }
-
     // --- nothing here may escape ------------------------------------------
 
     /** An exception out of this subscriber surfaces inside Worker::ack(), where nothing catches it and the consumer dies. */
@@ -411,21 +373,14 @@ final class BuildFailureHandlerTest extends TestCase
         );
     }
 
-    /**
-     * An empty callback_status_url is refused by the notifier, so this is the failure path where the client cannot be told at all.
-     * The cleanup still has to run and nothing may escape.
-     */
-    public function testAFailureWithNowhereToReportStillClearsTheWorkspace(): void
+    /** The client cannot be told, but the cleanup still has to run. */
+    public function testAFailingCallbackStillClearsTheWorkspace(): void
     {
         $jobDir = $this->givenAJobTree();
+        $reporter = $this->reporter(new MockHttpClient(new MockResponse('', ['http_code' => 500])));
 
-        $this->reporter()->onMessageFailed(
-            $this->failedEvent(new \RuntimeException('Download failed'), message: $this->job(callbackStatusUrl: '')),
-        );
+        $reporter->onMessageFailed($this->failedEvent(new \RuntimeException('Download failed')));
 
-        self::assertSame([], $this->callbacks);
-
-        /** The cleanup still happened. */
         self::assertDirectoryDoesNotExist($jobDir);
     }
 

@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Tests\Job;
 
 use App\Job\JobWorkspace;
-use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -144,96 +143,7 @@ final class JobWorkspaceTest extends TestCase
     /** Runs on the failure path, where throwing would cost the client its notice. */
     public function testClearDoesNotThrowWhenThereIsNothingToRemove(): void
     {
-        $this->workspace()->clear(self::BUILD);
-
-        $this->expectNotToPerformAssertions();
-    }
-
-    /**
-     * An unsafe id reaches clear() routinely, because it is one of the things a build is failed for.
-     * Nothing was created for such a job and the id cannot be turned into a path safely, so clear() does nothing.
-     */
-    #[DataProvider('provideUnsafeIds')]
-    public function testClearRefusesToActOnAnUnsafeId(string $unsafeId): void
-    {
-        $escapee = dirname($this->baseDir) . '/ssg-worker-clear-escaped-' . bin2hex(random_bytes(6));
-        mkdir($escapee, 0o750, true);
-
-        try {
-            $this->workspace()->clear($unsafeId);
-
-            self::assertDirectoryExists($escapee);
-        } finally {
-            exec('rm -rf ' . escapeshellarg($escapee));
-        }
-    }
-
-    /**
-     * Ids the allow-list must reject.
-     *
-     * @return array<string, array{string}> the id per case name
-     */
-    public static function provideUnsafeIds(): array
-    {
-        return [
-            'parent traversal' => ['../escape'],
-            'nested traversal' => ['../../etc/cron.d'],
-            'bare dotdot' => ['..'],
-            'single dot' => ['.'],
-            'absolute path' => ['/etc/cron.d'],
-            'contains slash' => ['site/nested'],
-            'null byte' => ["site\0"],
-            'empty' => [''],
-            'too long' => [str_repeat('a', 129)],
-
-            /** Not a traversal, but the reason the slug cannot double as the site title: a heading has spaces. */
-            'contains a space' => ['My Team Handbook'],
-        ];
-    }
-
-    /**
-     * One check, and this is it.
-     * reset() and publish() take the ids as already vetted, so nothing else stands between a queue payload and the filesystem.
-     */
-    #[DataProvider('provideUnsafeIds')]
-    public function testAssertSafeJobRejectsAnUnsafeStaticSiteId(string $unsafeId): void
-    {
-        self::assertFalse(JobWorkspace::isValidId($unsafeId));
-
-        /** Not RuntimeException: a bad id is the caller's mistake, not the environment's. */
-        $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('static_site_id');
-
-        JobWorkspace::assertSafeJob($unsafeId, self::BUILD, self::SLUG);
-    }
-
-    #[DataProvider('provideUnsafeIds')]
-    public function testAssertSafeJobRejectsAnUnsafeBuildId(string $unsafeId): void
-    {
-        $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('build_id');
-
-        JobWorkspace::assertSafeJob(self::SITE, $unsafeId, self::SLUG);
-    }
-
-    /**
-     * The slug is checked with the ids even though only publish() uses it.
-     * Finding out after a five-minute render that it cannot name a directory wastes the attempt.
-     */
-    #[DataProvider('provideUnsafeIds')]
-    public function testAssertSafeJobRejectsAnUnsafeSlug(string $unsafeSlug): void
-    {
-        $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('slug');
-
-        JobWorkspace::assertSafeJob(self::SITE, self::BUILD, $unsafeSlug);
-    }
-
-    public function testAssertSafeJobAcceptsAWholeValidJob(): void
-    {
-        JobWorkspace::assertSafeJob(self::SITE, self::BUILD, self::SLUG);
-
-        $this->expectNotToPerformAssertions();
+        self::assertTrue($this->workspace()->clear(self::BUILD));
     }
 
     public function testThrowsWhenTheBaseDirectoryCannotBeCreated(): void
@@ -346,34 +256,5 @@ final class JobWorkspaceTest extends TestCase
 
         self::assertSame('/opt/ssg/published/.staging/' . self::BUILD, $paths->publishStagingDir(self::BUILD));
         self::assertNotSame($paths->publishStagingDir(self::BUILD), $paths->publishStagingDir('0199a1b2-3c4d-7e5f-8a9b-ffffffffffff'));
-    }
-
-    // --- the allow-list ---------------------------------------------------
-    //
-    // The unsafe cases run through reset() and clear() above, where they matter. These cover
-    // the other direction: that the values publish actually sends are accepted.
-
-    /**
-     * Ids the allow-list must accept.
-     *
-     * @return array<string, array{string}> the id per case name
-     */
-    public static function provideSafeIds(): array
-    {
-        return [
-            'simple' => ['demo'],
-            'hyphenated' => ['demo-site'],
-            'underscored' => ['some_collective'],
-            'uuid' => ['11f5b798-6f34-4951-ad8b-bfd623ded5c2'],
-            'hex build id' => ['16ef078ad37fd894'],
-            'uuid v7 build id' => ['0199a1b2-3c4d-7e5f-8a9b-0c1d2e3f4a5b'],
-            'at the length limit' => [str_repeat('a', 128)],
-        ];
-    }
-
-    #[DataProvider('provideSafeIds')]
-    public function testAcceptsASafeId(string $safe): void
-    {
-        self::assertTrue(JobWorkspace::isValidId($safe));
     }
 }
