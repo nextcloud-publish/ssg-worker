@@ -96,7 +96,7 @@ final class StatusNotifierTest extends TestCase
         self::assertContains('Content-Type: application/json', $seen['options']['headers']);
         self::assertSame([
             'status' => 'published',
-            'result' => ['publish_url' => self::PUBLISH_URL],
+            'data' => ['publish_url' => self::PUBLISH_URL],
         ], json_decode($seen['options']['body'], true));
     }
 
@@ -112,7 +112,7 @@ final class StatusNotifierTest extends TestCase
 
         self::assertSame([
             'status' => 'failed',
-            'result' => ['error_message' => 'Extracting failed: not in gzip format'],
+            'data' => ['error_message' => 'Extracting failed: not in gzip format'],
         ], json_decode($seen['options']['body'], true));
     }
 

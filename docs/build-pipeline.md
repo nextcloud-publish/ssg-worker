@@ -87,8 +87,8 @@ the consumer on its first retry. It is declared in publish's `definitions.json`.
 `PUT` to `callback_status_url`. These two shapes are the whole body:
 
 ```json
-{ "status": "published", "result": { "publish_url": "https://sites.example.org/<static_site_id>/<slug>/" } }
-{ "status": "failed",    "result": { "error_message": "Could not download ..." } }
+{ "status": "published", "data": { "publish_url": "https://sites.example.org/<static_site_id>/<slug>/" } }
+{ "status": "failed",    "data": { "error_message": "Could not download ..." } }
 ```
 
 - **At-least-once.** A crash between the PUT and the ack sends it again. Receivers identify

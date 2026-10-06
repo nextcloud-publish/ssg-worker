@@ -79,8 +79,8 @@ directory, so reusing one would republish pages that were deleted from the colle
 | Transient failure | rethrown, and the transport redelivers after 15s. `max_retries: 1` gives two build attempts; on the second failure `BuildFailureHandler` deletes the build tree and PUTs `failed`  |
 | Permanent failure | reported `failed` on the first delivery, never retried. Caused by an unsafe id or slug, a URL that is not http or https, or an archive with no markdown                            |
 
-The callback body is `{"status": "published", "result": {"publish_url": ...}}` or
-`{"status": "failed", "result": {"error_message": ...}}`, nothing else.
+The callback body is `{"status": "published", "data": {"publish_url": ...}}` or
+`{"status": "failed", "data": {"error_message": ...}}`, nothing else.
 
 Callback delivery is at-least-once. Receivers must dedupe on `(callback_status_url, status)` and
 treat a terminal status as final. The payload is specified in

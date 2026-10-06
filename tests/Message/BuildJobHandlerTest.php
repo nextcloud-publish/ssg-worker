@@ -283,7 +283,7 @@ final class BuildJobHandlerTest extends TestCase
         self::assertSame(self::CALLBACK_URL, $this->callbacks[0]['url']);
         self::assertSame([
             'status' => 'published',
-            'result' => ['publish_url' => 'http://sites.test/' . self::SITE_ID . '/' . self::SLUG . '/'],
+            'data' => ['publish_url' => 'http://sites.test/' . self::SITE_ID . '/' . self::SLUG . '/'],
         ], $this->onlyCallback());
     }
 

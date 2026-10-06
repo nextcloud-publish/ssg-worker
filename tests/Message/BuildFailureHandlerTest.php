@@ -196,7 +196,7 @@ final class BuildFailureHandlerTest extends TestCase
 
         self::assertSame([[
             'status' => 'failed',
-            'result' => ['error_message' => 'tar: unexpected EOF in archive'],
+            'data' => ['error_message' => 'tar: unexpected EOF in archive'],
         ]], $this->callbacks);
     }
 
@@ -207,7 +207,7 @@ final class BuildFailureHandlerTest extends TestCase
             $this->failedEvent(new \InvalidArgumentException('Status callback rejected with HTTP 404.')),
         );
 
-        self::assertSame('Status callback rejected with HTTP 404.', $this->callbacks[0]['result']['error_message']);
+        self::assertSame('Status callback rejected with HTTP 404.', $this->callbacks[0]['data']['error_message']);
     }
 
     // --- redaction --------------------------------------------------------
@@ -227,7 +227,7 @@ final class BuildFailureHandlerTest extends TestCase
     {
         $this->reporter()->onMessageFailed($this->failedEvent(new \RuntimeException($raw)));
 
-        return $this->callbacks[0]['result']['error_message'];
+        return $this->callbacks[0]['data']['error_message'];
     }
 
     public function testTheReportedReasonCarriesNoFilesystemPaths(): void
@@ -340,7 +340,7 @@ final class BuildFailureHandlerTest extends TestCase
 
         $handler->onMessageFailed($this->failedEvent(new \RuntimeException('at /opt/ssg/published/demo')));
 
-        self::assertStringContainsString('<published>', $this->callbacks[0]['result']['error_message']);
+        self::assertStringContainsString('<published>', $this->callbacks[0]['data']['error_message']);
     }
 
     // --- what is left on disk ---------------------------------------------

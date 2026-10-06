@@ -9,7 +9,7 @@ use Symfony\Contracts\HttpClient\HttpClientInterface;
 
 /**
  * PUTs a build's final result to the callback_status_url from the build request.
- * The body is {"status": "published", "result": {"publish_url": ...}} or {"status": "failed", "result": {"error_message": ...}}.
+ * The body is {"status": "published", "data": {"publish_url": ...}} or {"status": "failed", "data": {"error_message": ...}}.
  * Throws \InvalidArgumentException when no retry could succeed and \RuntimeException when one might.
  *
  * @param HttpClientInterface $httpClient The http client to use to send the notification.
@@ -65,7 +65,7 @@ final class StatusNotifier
     }
 
     /**
-     * PUTs {"status": $status, "result": $result} to $callbackStatusUrl.
+     * PUTs {"status": $status, "data": $result} to $callbackStatusUrl.
      *
      * @param string $callbackStatusUrl The url to send the notification to.
      * @param string $buildId The build id, used for the log line.
@@ -79,7 +79,7 @@ final class StatusNotifier
     {
         $payload = [
             'status' => $status,
-            'result' => $result,
+            'data' => $result,
         ];
 
         try {
