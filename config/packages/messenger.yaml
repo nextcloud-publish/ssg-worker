@@ -3,41 +3,43 @@ framework:
     messenger:
         transports:
             builds:
-                # Same DSN variable publish uses (and the same one this app's
-                # own compose file already sets) -- deliberately not Flex's
-                # MESSENGER_TRANSPORT_DSN, so the two services cannot drift
-                # apart on which env var actually wires the broker.
+                # Same env var and serializer as the publish API's transport.
                 dsn: '%env(AMQP_DSN)%'
-
-                # Matches publish's transport: publish serializes with
-                # messenger.transport.symfony_serializer (JSON, not PHP
-                # serialize()), so this side has to decode the same way for
-                # the `type` header to resolve to a real class.
                 serializer: messenger.transport.symfony_serializer
 
                 options:
-                    # The broker imports its whole topology from
-                    # publish/docker/rabbitmq-config/definitions.json at boot
-                    # and owns it -- this side must never try to declare or
-                    # bind anything either.
+                    # The broker imports its topology from publish/docker/rabbitmq-config/definitions.json,
+                    # including the `delays` exchange the retry delay queues bind to.
                     auto_setup: false
 
-                    # Must match the broker's heartbeat in
-                    # publish/docker/rabbitmq-config/rabbitmq.conf, or a quiet
-                    # socket looks dead.
+                    # Must match `heartbeat` in publish/docker/rabbitmq-config/rabbitmq.conf.
                     heartbeat: '%env(int:AMQP_HEARTBEAT)%'
 
-                    # REQUIRED for consuming: without this, the transport
-                    # derives a queue name from the DSN path instead (falling
-                    # back to "messages"), and would silently listen on the
-                    # wrong queue -- q.builds is the one the broker actually
-                    # has, and auto_setup being off means it never gets
-                    # declared on our end anyway.
                     queues:
-                        q.builds: ~
+                        q.builds:
+                            # Without it, `messenger:stats` declares q.builds as a classic queue and fails against the quorum queue.
+                            arguments:
+                                x-queue-type: quorum
+
+                    # The default exchange, which routes by queue name.
+                    exchange:
+                        name: ''
+                        default_publish_routing_key: q.builds
 
                 retry_strategy:
-                    # Log and ack, never redeliver. There is no dead-letter
-                    # queue and no retry counter on the broker side either, so
-                    # retrying here would be a new, unreviewed behavior change.
-                    max_retries: 0
+                    # Two build attempts in total. A redelivery after consumer_timeout also counts as one.
+                    max_retries: 1
+                    delay: 15000
+                    multiplier: 4
+                    max_delay: 60000
+                    # The delay is part of the delay queue name, so jitter would declare a new queue per attempt.
+                    jitter: 0
+
+                # No failure_transport: on the last attempt BuildFailureHandler reports `failed` and the message is acked.
+
+when@test:
+    framework:
+        messenger:
+            transports:
+                # No broker in tests. Merged over the block above, so `options` must still resolve.
+                builds: 'in-memory://'

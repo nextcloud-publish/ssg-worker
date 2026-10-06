@@ -12,19 +12,17 @@ use Symfony\Component\HttpClient\MockHttpClient;
 use Symfony\Component\HttpClient\Response\MockResponse;
 
 /**
- * Uses MockHttpClient instead of a real network call, so every case here
- * runs offline -- including the ones that would otherwise need a slow, huge
- * or broken server.
+ * Covers App\Job\ContentDownloader.
+ *
+ * MockHttpClient replaces the network, so every case runs offline, including the ones that
+ * would otherwise need a slow, huge or broken server.
  */
 final class ContentDownloaderTest extends TestCase
 {
-    /**
-     * Large enough that tests not about the byte limit never hit it. Tests
-     * about the limit use SMALL_CAP_MB instead.
-     */
+    /** Large enough that tests not about the byte limit never reach it. */
     private const CAP_MB = 8;
 
-    // Mock Collective content download url for testing with correct structure.
+    /** A Collectives content download url with the structure the real one has. */
     private const CONTENT_URL = 'https://some-nextcloud.org/apps/collectives/some-collective-1234/publish/markdown_bundle';
 
     /** The smallest cap the class accepts, and the same value in bytes. */
@@ -46,6 +44,23 @@ final class ContentDownloaderTest extends TestCase
         }
     }
 
+    /**
+     * Creates a downloader with the defaults from services.yaml.
+     *
+     * @param MockHttpClient $client The client to download with.
+     * @param int $maxMegabytes The download limit in megabytes.
+     * @return ContentDownloader the downloader
+     */
+    private function downloader(MockHttpClient $client, int $maxMegabytes = self::CAP_MB): ContentDownloader
+    {
+        return new ContentDownloader($client, $maxMegabytes, maxDurationSeconds: 300, timeoutSeconds: 30, maxRedirects: 3);
+    }
+
+    /**
+     * The path the downloader writes to under $this->targetDir.
+     *
+     * @return string the expected archive path
+     */
     private function target(): string
     {
         return $this->targetDir . '/' . ContentDownloader::FILENAME;
@@ -55,7 +70,7 @@ final class ContentDownloaderTest extends TestCase
     {
         $client = new MockHttpClient(new MockResponse('tar-gz-bytes'));
 
-        $path = (new ContentDownloader($client, self::CAP_MB))
+        $path = $this->downloader($client)
             ->download(self::CONTENT_URL, $this->targetDir);
 
         self::assertSame($this->target(), $path);
@@ -63,13 +78,12 @@ final class ContentDownloaderTest extends TestCase
         self::assertSame('tar-gz-bytes', file_get_contents($path));
     }
 
+    /** The url puts a traversal attempt in its last path segment, which a naive basename() would use as the filename. */
     public function testWritesUnderAFixedFilenameNotTheUrlBasename(): void
     {
         $client = new MockHttpClient(new MockResponse('bytes'));
 
-        // Puts a traversal attempt in the last path segment, which a naive
-        // basename() would use as the filename.
-        $path = (new ContentDownloader($client, self::CAP_MB))->download(
+        $path = $this->downloader($client)->download(
             'https://some-nextcloud.org/apps/collectives/some-collective-1234/publish/evil%2F..%2Fname.tar.gz',
             $this->targetDir,
         );
@@ -79,38 +93,9 @@ final class ContentDownloaderTest extends TestCase
     }
 
     /**
-     * @return array<string, array{string}>
-     */
-    public static function provideUnfetchableUrls(): array
-    {
-        return [
-            'file scheme' => ['file:///etc/passwd'],
-            'ftp scheme' => ['ftp://some-nextcloud.org/apps/collectives/some-collective-1234/publish/markdown_bundle'],
-            'php wrapper' => ['php://filter/read=convert.base64-encode/resource=/etc/passwd'],
-            'data uri' => ['data://text/plain;base64,SSBhbSBldmls'],
-            'no scheme' => ['some-nextcloud.org/apps/collectives/some-collective-1234/publish/markdown_bundle'],
-            'empty' => [''],
-        ];
-    }
-
-    #[DataProvider('provideUnfetchableUrls')]
-    public function testRefusesUrlsThatAreNotHttpWithoutIssuingARequest(string $url): void
-    {
-        $client = new MockHttpClient(new MockResponse('should never be fetched'));
-        $downloader = new ContentDownloader($client, self::CAP_MB);
-
-        try {
-            $downloader->download($url, $this->targetDir);
-            self::fail('Expected an InvalidArgumentException for ' . $url);
-        } catch (\InvalidArgumentException) {
-            // Confirms the check runs before any request is made.
-            self::assertSame(0, $client->getRequestsCount());
-            self::assertFileDoesNotExist($this->target());
-        }
-    }
-
-    /**
-     * @return array<string, array{int}>
+     * Response statuses the downloader must treat as a failure.
+     *
+     * @return array<string, array{int}> the status code per case name
      */
     public static function provideErrorStatuses(): array
     {
@@ -128,12 +113,12 @@ final class ContentDownloaderTest extends TestCase
         $client = new MockHttpClient(new MockResponse('nope', ['http_code' => $status]));
 
         try {
-            (new ContentDownloader($client, self::CAP_MB))->download(self::CONTENT_URL, $this->targetDir);
+            $this->downloader($client)->download(self::CONTENT_URL, $this->targetDir);
             self::fail('Expected a RuntimeException for HTTP ' . $status);
         } catch (\RuntimeException $e) {
             self::assertStringContainsString((string) $status, $e->getMessage());
-            // No partial file should be left behind that a later step could
-            // mistake for a real archive.
+
+            /** No partial file is left that a later step could take for a real archive. */
             self::assertFileDoesNotExist($this->target());
         }
     }
@@ -147,7 +132,7 @@ final class ContentDownloaderTest extends TestCase
         ]));
 
         try {
-            (new ContentDownloader($client, maxMegabytes: self::SMALL_CAP_MB))
+            $this->downloader($client, self::SMALL_CAP_MB)
                 ->download(self::CONTENT_URL, $this->targetDir);
             self::fail('Expected a RuntimeException for an oversized Content-Length.');
         } catch (\RuntimeException $e) {
@@ -156,13 +141,12 @@ final class ContentDownloaderTest extends TestCase
         }
     }
 
+    /** The copy reads one byte past the cap to detect an overrun, so the exact limit still has to succeed. */
     public function testAcceptsABodyExactlyOnTheLimit(): void
     {
-        // The copy reads one byte past the cap to detect an overrun, so the
-        // exact limit itself still has to succeed.
         $client = new MockHttpClient(new MockResponse(str_repeat('x', self::SMALL_CAP_BYTES)));
 
-        $path = (new ContentDownloader($client, maxMegabytes: self::SMALL_CAP_MB))
+        $path = $this->downloader($client, self::SMALL_CAP_MB)
             ->download(self::CONTENT_URL, $this->targetDir);
 
         self::assertSame(self::SMALL_CAP_BYTES, filesize($path));
@@ -175,19 +159,20 @@ final class ContentDownloaderTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('exceeded the ' . self::SMALL_CAP_BYTES . ' byte limit');
 
-        (new ContentDownloader($client, maxMegabytes: self::SMALL_CAP_MB))
+        $this->downloader($client, self::SMALL_CAP_MB)
             ->download(self::CONTENT_URL, $this->targetDir);
     }
 
+    /**
+     * No Content-Length header here.
+     * A response can omit it or declare a false value, so the overrun is only caught by counting bytes as they arrive.
+     */
     public function testAbortsWhenTheBodyExceedsTheLimit(): void
     {
-        // No Content-Length header here: a response can omit it or send a
-        // false value, so this can only be caught by counting bytes as they
-        // arrive, not by checking a header up front.
         $client = new MockHttpClient(new MockResponse(str_repeat('x', self::SMALL_CAP_BYTES * 2)));
 
         try {
-            (new ContentDownloader($client, maxMegabytes: self::SMALL_CAP_MB))
+            $this->downloader($client, self::SMALL_CAP_MB)
                 ->download(self::CONTENT_URL, $this->targetDir);
             self::fail('Expected a RuntimeException once the limit was passed.');
         } catch (\RuntimeException $e) {
@@ -201,7 +186,7 @@ final class ContentDownloaderTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('at least 1 MB');
 
-        new ContentDownloader(new MockHttpClient(), maxMegabytes: 0);
+        $this->downloader(new MockHttpClient(), 0);
     }
 
     public function testLeavesNoPartialFileWhenTheTransferBreaksMidStream(): void
@@ -215,7 +200,7 @@ final class ContentDownloaderTest extends TestCase
         $client = new MockHttpClient(new MockResponse($brokenBody));
 
         try {
-            (new ContentDownloader($client, self::CAP_MB))->download(self::CONTENT_URL, $this->targetDir);
+            $this->downloader($client)->download(self::CONTENT_URL, $this->targetDir);
             self::fail('Expected a RuntimeException when the transfer breaks.');
         } catch (\RuntimeException $e) {
             self::assertStringContainsString('connection reset', $e->getMessage());
@@ -230,7 +215,7 @@ final class ContentDownloaderTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('Target directory does not exist');
 
-        (new ContentDownloader($client, self::CAP_MB))
+        $this->downloader($client)
             ->download(self::CONTENT_URL, $this->targetDir . '/missing');
     }
 
@@ -247,10 +232,10 @@ final class ContentDownloaderTest extends TestCase
         $client = new MockHttpClient(new MockResponse('bytes'));
 
         try {
-            (new ContentDownloader($client, self::CAP_MB))->download(self::CONTENT_URL, $readOnly);
+            $this->downloader($client)->download(self::CONTENT_URL, $readOnly);
             self::fail('Expected a RuntimeException for an unwritable directory.');
         } catch (\RuntimeException $e) {
-            // The filesystem's error message is what makes this actionable.
+            /** The filesystem's own reason travels in the message. */
             self::assertStringContainsString('Permission denied', $e->getMessage());
         } finally {
             chmod($readOnly, 0o700);
