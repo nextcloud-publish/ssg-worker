@@ -8,6 +8,7 @@ use App\Job\ArchiveExtractor;
 use App\Job\ContentDownloader;
 use App\Job\JobWorkspace;
 use App\Job\SiteRenderer;
+use App\Job\StatusNotifier;
 use App\Message\BuildJob;
 use App\Message\BuildJobHandler;
 use PHPUnit\Framework\TestCase;
@@ -32,9 +33,19 @@ final class BuildJobHandlerTest extends TestCase
     // Mock Collective content download url for testing with correct structure.
     private const CONTENT_URL = 'https://some-nextcloud.org/apps/collectives/some-collective-1234/publish/markdown_bundle';
 
+    // Mock Collective status callback url for testing with correct structure.
+    private const CALLBACK_URL = 'https://cloud.example.org/collectives/status/1234';
+
+    private const PUBLIC_SITE_BASE_URL = 'https://publish.example.com';
+
     private string $baseDir;
     private string $archiveBytes;
     private MockHttpClient $client;
+
+    /** @var list<array{method: string, url: string, options: array}> */
+    private array $statusRequests;
+    private MockHttpClient $statusClient;
+
     private string $logFile;
     private string|false $previousErrorLog;
 
@@ -49,6 +60,17 @@ final class BuildJobHandlerTest extends TestCase
         // response because a rebuild downloads it twice.
         $this->archiveBytes = $this->sampleArchiveBytes();
         $this->client = new MockHttpClient(fn (): MockResponse => new MockResponse($this->archiveBytes));
+
+        // Separate from $this->client: the notifier must not add requests to
+        // the download client's count, or the existing
+        // assertSame(0, $this->client->getRequestsCount()) assertions below
+        // would break once a notification is also sent.
+        $this->statusRequests = [];
+        $this->statusClient = new MockHttpClient(function (string $method, string $url, array $options): MockResponse {
+            $this->statusRequests[] = ['method' => $method, 'url' => $url, 'options' => $options];
+
+            return new MockResponse();
+        });
 
         // error_log() writes to stderr/syslog by default, neither of which
         // a test can assert against. Restored in tearDown().
@@ -94,6 +116,8 @@ final class BuildJobHandlerTest extends TestCase
             new ArchiveExtractor(),
             new SiteRenderer(),
             new JobWorkspace($this->baseDir),
+            new StatusNotifier($this->statusClient),
+            self::PUBLIC_SITE_BASE_URL,
         );
     }
 
@@ -115,7 +139,7 @@ final class BuildJobHandlerTest extends TestCase
             static_site_id: $staticSiteId,
             slug: $slug,
             content_download_url: $contentDownloadUrl,
-            callback_status_url: '',
+            callback_status_url: self::CALLBACK_URL,
             created_at: '2026-09-03T13:00:09+00:00',
         );
     }
@@ -197,12 +221,56 @@ final class BuildJobHandlerTest extends TestCase
             new ArchiveExtractor(),
             new SiteRenderer(),
             new JobWorkspace($this->baseDir),
+            new StatusNotifier($this->statusClient),
+            self::PUBLIC_SITE_BASE_URL,
         );
 
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('Extracting');
 
         $handler($this->job());
+    }
+
+    public function testNotifiesCollectivesOfASuccessfulBuild(): void
+    {
+        ($this->handler())($this->job());
+
+        self::assertCount(1, $this->statusRequests);
+        self::assertSame('PATCH', $this->statusRequests[0]['method']);
+        self::assertSame(self::CALLBACK_URL, $this->statusRequests[0]['url']);
+
+        $body = json_decode((string) $this->statusRequests[0]['options']['body'], true);
+        self::assertSame([
+            'status' => 'published',
+            'data' => ['publish_url' => self::PUBLIC_SITE_BASE_URL . '/publish/' . self::SITE_ID],
+        ], $body);
+    }
+
+    public function testNotifiesCollectivesOfAFailedBuild(): void
+    {
+        $handler = new BuildJobHandler(
+            new ContentDownloader(new MockHttpClient(new MockResponse('not an archive')), maxMegabytes: 1),
+            new ArchiveExtractor(),
+            new SiteRenderer(),
+            new JobWorkspace($this->baseDir),
+            new StatusNotifier($this->statusClient),
+            self::PUBLIC_SITE_BASE_URL,
+        );
+
+        try {
+            $handler($this->job());
+            self::fail('Expected a RuntimeException for an invalid archive.');
+        } catch (\RuntimeException) {
+            // The build's own exception is asserted in
+            // testFailsWhenTheDownloadIsNotAValidArchive(); here only the
+            // callback it triggers matters.
+        }
+
+        self::assertCount(1, $this->statusRequests);
+
+        $body = json_decode((string) $this->statusRequests[0]['options']['body'], true);
+        self::assertSame('failed', $body['status']);
+        self::assertStringContainsString('Extracting', $body['data']['error_message']);
     }
 
     /**

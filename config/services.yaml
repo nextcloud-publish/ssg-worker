@@ -26,6 +26,12 @@ services:
     App\Message\BuildJobHandler:
         tags:
             - { name: messenger.message_handler, handles: App\Message\BuildJob, from_transport: builds }
+        arguments:
+            # Base URL the rendered site is served from; combined with
+            # static_site_id to build the publish_url sent in the success
+            # callback. No default: guessing this would silently send
+            # Collectives a broken link.
+            $publicSiteBaseUrl: '%env(PUBLIC_SITE_BASE_URL)%'
 
     App\Job\JobWorkspace:
         arguments:
