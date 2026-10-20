@@ -34,6 +34,7 @@ rejects it first. Of the fields it does read:
 | `static_site_id`       | names the job's folder under `JOB_STORAGE_DIR`             |
 | `content_download_url` | the archive to fetch; only `http`/`https` are accepted     |
 | `slug`                 | titles the rendered site, as the header link on every page |
+| `callback_status_url`  | notified with the build outcome after the pipeline finishes, success or failure (see [Status callback](#status-callback) below) |
 
 
 `static_site_id` arrives from an HTTP payload and becomes a directory name on a
@@ -46,8 +47,36 @@ leaves their contents alone.
 
 A message whose handler throws — an unsafe `static_site_id`, folders that
 cannot be created, a failed download, an archive that will not extract — is not
-retried (`retry_strategy.max_retries: 0`): log and move on, no dead-letter
-queue yet.
+retried (`retry_strategy.max_retries: 0`): a failure callback is sent to
+`callback_status_url`, then log and move on, no dead-letter queue yet.
+
+## Status callback
+
+Once the pipeline finishes, `StatusNotifier` reports the outcome back to
+Collectives with a `PATCH` to the job's `callback_status_url` — matching
+Collectives' OCS API endpoint (`PATCH
+/ocs/v2.php/apps/collectives/api/v1.0/p/static-sites/<static_site_id>`), which
+also requires an `OCS-APIREQUEST: true` header or Nextcloud rejects the
+request as a plain browser request. On success:
+
+```json
+{ "status": "published", "data": { "publish_url": "https://publish.schnubbel.com/publish/<static_site_id>" } }
+```
+
+On failure:
+
+```json
+{ "status": "failed", "data": { "error_message": "<some error message>" } }
+```
+
+`publish_url` is built from `PUBLIC_SITE_BASE_URL` and the job's
+`static_site_id`. `callback_status_url` arrives from the same HTTP payload as
+`content_download_url`, so it gets the same treatment: only `http`/`https` are
+called, guarding against SSRF via a `file://`, `gopher://` or internal-host
+target. A broken callback — an unreachable host, a non-2xx response, a
+disallowed scheme — is only logged via `error_log()` and never retried: by the
+time it runs the build has already succeeded or failed, so it cannot turn a
+successful build into a failed job or vice versa.
 
 ## Requirements
 
@@ -68,13 +97,15 @@ queue yet.
 | `AMQP_HEARTBEAT`  | no       | `10`    | AMQP heartbeat interval in seconds; must match the broker's setting                                            |
 | `JOB_STORAGE_DIR` | yes      | none    | Root of the job volume shared with `publish`; the worker creates `<static_site_id>/input` + `/output` under it |
 | `MAX_DOWNLOAD_MB` | yes      | none    | Ceiling on a single content download, in megabytes (e.g. `256`); minimum `1`                                   |
+| `PUBLIC_SITE_BASE_URL` | yes  | none    | Base URL the rendered site is served from; combined with `static_site_id` to build the `publish_url` sent in the success callback |
 
 
-`AMQP_DSN`, `JOB_STORAGE_DIR` and `MAX_DOWNLOAD_MB` have no fallback — an unset
-variable is a broken deployment. `JOB_STORAGE_DIR` has to name the same
-directory `publish` uses, and the download cap guards that shared volume, so
-guessing a value for either would hide a misconfiguration rather than surface
-it.
+`AMQP_DSN`, `JOB_STORAGE_DIR`, `MAX_DOWNLOAD_MB` and `PUBLIC_SITE_BASE_URL`
+have no fallback — an unset variable is a broken deployment. `JOB_STORAGE_DIR`
+has to name the same directory `publish` uses, and the download cap guards
+that shared volume, so guessing a value for either would hide a
+misconfiguration rather than surface it. Guessing `PUBLIC_SITE_BASE_URL` would
+silently send Collectives a broken `publish_url`.
 
 ## Local development
 
@@ -138,6 +169,7 @@ src/
                              ContentDownloader: streams content_download_url to disk, scheme-checked and size-capped
                              ArchiveExtractor: unpacks the archive into input/content_unarchived
                              SiteRenderer: renders the extracted pages into output/
+                             StatusNotifier: posts the build outcome to callback_status_url
                              Helper: creates a directory or throws with the filesystem's own reason
   Message/                   BuildJob: the message shape for q.builds, mirroring publish's message class
                              BuildJobHandler: registered in services.yaml, runs the whole per-job pipeline
