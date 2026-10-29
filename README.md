@@ -190,8 +190,22 @@ Passing tests say nothing about whether `messenger:consume builds` survives its 
 retry. `InMemoryTransportFactory` discards every transport option, so nothing under
 `options:` in `messenger.yaml` is exercised, including the `delays` exchange the broker
 must declare.
-[docs/build-pipeline.md](docs/build-pipeline.md#what-the-test-suite-cannot-reach) lists
+[docs/build-pipeline.md](docs/build-pipeline.md#not-covered-by-the-tests) lists
 what that leaves uncovered and which dev-stack checks cover it instead.
+
+PHPStan checks `src/` and `tests/` at level 10. It reads the service container of the dev
+environment, so warm that cache first:
+
+```bash
+php bin/console cache:warmup --env=dev && vendor/bin/phpstan analyse
+```
+
+[pre-commit](https://pre-commit.com/) runs the CI lint steps, PHPStan and the tests before each commit.
+It needs PHP 8.5 and `composer install` on the host. Install the hook once:
+
+```bash
+pre-commit install
+```
 
 ## Layout
 
