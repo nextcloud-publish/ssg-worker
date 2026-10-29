@@ -48,6 +48,10 @@ jobs:
       - name: Validate composer.json
         run: composer validate --strict --no-check-publish
 
+      # Reads composer.lock, so it needs no install; fails on any known advisory.
+      - name: Audit dependencies
+        run: composer audit --locked
+
       - name: Install dependencies
         uses: ramsey/composer-install@v3
 
