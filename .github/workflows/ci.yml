@@ -110,11 +110,10 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
+          # The context stays the repo root, because the Dockerfile copies
+          # composer.json and composer.lock from it.
           context: .
-          # Root of the repo, not docker/: this repo keeps a single Dockerfile
-          # there. Naming a directory that does not exist fails in buildx
-          # ("lstat docker: no such file or directory"), not at checkout.
-          file: Dockerfile
+          file: docker/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

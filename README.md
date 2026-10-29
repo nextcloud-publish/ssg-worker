@@ -94,17 +94,41 @@ along with each job's folders underneath it.
 
 ## Docker
 
-This repo ships a single `Dockerfile` at its root and **no compose file of its
-own**. Checkout [publish](https://github.com/nextcloud-publish/publish) for a system overview.
+This repo ships one Dockerfile, `docker/Dockerfile`, and no compose file. Its default stage
+`release` holds the source. Stage `base` leaves it out for the dev compose, which mounts the
+checkout at `/ssg-worker`. The full stack lives in `publish` and builds this repo from a
+sibling checkout:
 
 ```bash
-docker build -t ssg-worker .
+docker compose -f ../publish/docker/dev/compose.yaml up --build
 ```
 
-The image installs `ext-amqp` with PIE and defaults to `messenger:consume builds -vv`, so the built image is ready to consume immediately. `vendor/` is
-installed at image build time; the compose file keeps it behind an anonymous
-volume so the `/app` bind mount does not shadow it — rebuild with `--build`
-after changing `composer.json`.
+To build the image on its own:
+
+```bash
+docker build --pull -f docker/Dockerfile -t ssg-worker .
+```
+
+The build context is the repo root, so `.dockerignore` stays there. `--pull` fetches the
+current `alpine:latest`; a local copy older than Alpine 3.23 has no `php85` packages.
+
+The image is Alpine with Alpine's PHP 8.5 packages, `ext-amqp` and `pcntl` included. It runs
+`messenger:consume builds --time-limit=3600 --memory-limit=512M`, so it exits every hour and
+must run under a restart policy. Other limits are set with `command:` in the compose file.
+
+The worker runs as the user `ssg-worker`, uid and gid 10001; `--build-arg UID=… GID=…`
+changes them. The host gives that uid the directories mounted at `JOB_STORAGE_DIR` and
+`PUBLISHED_DIR`. The dev compose runs it with your host ids instead
+(`SSG_WORKER_UID`/`SSG_WORKER_GID`, default 1000).
+
+PHP reads its time zone from `TZ`, default UTC.
+
+`pcntl` is what lets Symfony install its `SIGTERM` handler. Without it `docker stop`
+kills the worker mid-build, the message is redelivered, and a build attempt is spent.
+
+`vendor/` is installed at image build time. Compose keeps it behind an anonymous volume
+so the `/ssg-worker` bind mount does not shadow it. Rebuild with `--build` after changing
+`composer.json`.
 
 ## Tests
 
@@ -128,7 +152,7 @@ say nothing about whether `messenger:consume builds` can connect.
 ## Layout
 
 ```
-Dockerfile                   php:8.5-cli-alpine, builds vendor/ at image build time
+docker/Dockerfile            alpine + php85 packages + GNU tar; stages base (no source) and release
 config/
   packages/messenger.yaml    builds transport (AMQP_DSN, no auto_setup, no retry)
   packages/property_info.yaml constructor extractor, so BuildJob can be built
