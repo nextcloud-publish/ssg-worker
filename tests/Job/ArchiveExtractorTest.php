@@ -8,8 +8,10 @@ use App\Job\ArchiveExtractor;
 use PHPUnit\Framework\TestCase;
 
 /**
- * The fixtures are built with tar in setUp() rather than committed as binary
- * blobs, so what they contain is readable in this file.
+ * Covers App\Job\ArchiveExtractor.
+ *
+ * makeArchive() builds each fixture with tar rather than committing binary blobs, so what
+ * every archive contains is readable in this file.
  */
 final class ArchiveExtractorTest extends TestCase
 {
@@ -31,9 +33,10 @@ final class ArchiveExtractorTest extends TestCase
     }
 
     /**
-     * Builds a .tar.gz from a path => contents map and returns its path.
+     * Builds a .tar.gz from a path => contents map.
      *
-     * @param array<string,string> $files
+     * @param array<string,string> $files The archive members, keyed by path inside the archive.
+     * @return string the path of the built archive
      */
     private function makeArchive(array $files): string
     {
@@ -69,6 +72,7 @@ final class ArchiveExtractorTest extends TestCase
         self::assertSame('# hello', file_get_contents($this->targetDir . '/Readme.md'));
     }
 
+    /** Dot-prefixed directories are how Collectives stores inline media, and a glob that skips hidden entries loses them. */
     public function testKeepsNestedDirectories(): void
     {
         $archive = $this->makeArchive([
@@ -79,15 +83,12 @@ final class ArchiveExtractorTest extends TestCase
         (new ArchiveExtractor())->extract($archive, $this->targetDir);
 
         self::assertSame('# cats', file_get_contents($this->targetDir . '/Cats/Readme.md'));
-        // Dot-prefixed dirs are how Collectives stores inline media, and they
-        // are easy to lose to a glob that skips hidden entries.
         self::assertFileExists($this->targetDir . '/Cats/.attachments.13283723/paw.jpg');
     }
 
+    /** The case that ruled PharData out: it throws on this filename while merely iterating the archive. */
     public function testSurvivesNonAsciiFilenames(): void
     {
-        // The case that ruled PharData out: it throws on the sample corpus's
-        // "Gorila_de_montaña_(...).jpg" while merely iterating the archive.
         $name = 'Gorila_de_montaña_(Gorilla_beringei), Uganda, DD_80.jpg';
         $archive = $this->makeArchive([$name => 'JPEGDATA']);
 
@@ -106,8 +107,7 @@ final class ArchiveExtractorTest extends TestCase
             (new ArchiveExtractor())->extract($notAnArchive, $this->targetDir);
             self::fail('Expected a RuntimeException for a non-archive.');
         } catch (\RuntimeException $e) {
-            // tar's own complaint is the actionable part; without it the
-            // message would be a bare exit code.
+            /** Tar's own complaint, without which the message would be a bare exit code. */
             self::assertStringContainsString($notAnArchive, $e->getMessage());
             self::assertMatchesRegularExpression('/gzip|tar|format|magic/i', $e->getMessage());
         }
@@ -120,10 +120,9 @@ final class ArchiveExtractorTest extends TestCase
         (new ArchiveExtractor())->extract($this->tmp . '/missing.tar.gz', $this->targetDir);
     }
 
+    /** JobWorkspace::reset() provisions only input/ and output/, so extract() has to create content_unarchived/ itself. */
     public function testCreatesTheTargetDirectoryWhenItDoesNotExist(): void
     {
-        // Nothing else creates content_unarchived/ -- publish only provisions
-        // input/ and output/ -- so extract() has to make its own destination.
         $archive = $this->makeArchive(['Readme.md' => '# hello']);
         $fresh = $this->targetDir . '/content_unarchived';
 
@@ -146,7 +145,8 @@ final class ArchiveExtractorTest extends TestCase
             self::fail('Expected a RuntimeException for an uncreatable target.');
         } catch (\RuntimeException $e) {
             self::assertStringContainsString('Could not create', $e->getMessage());
-            // The filesystem's reason is the actionable half of the message.
+
+            /** The filesystem's own reason travels in the message. */
             self::assertStringContainsString('Not a directory', $e->getMessage());
         }
     }

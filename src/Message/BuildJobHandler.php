@@ -8,61 +8,100 @@ use App\Job\ArchiveExtractor;
 use App\Job\ContentDownloader;
 use App\Job\JobWorkspace;
 use App\Job\SiteRenderer;
+use App\Job\StatusNotifier;
+use Symfony\Component\Messenger\Exception\UnrecoverableMessageHandlingException;
 
 /**
- * Handles build jobs messages reveived via q.builds into html:
- *  - creates the job's folders
- *  - downloads and extracts the content archive
- *  - renders the pages into html
+ * Builds a job received from publish API via symfony messenger:
+ *  download, extract, render, publish, report.
  *
- * Registered as a message handler in services.yaml instead of via
- * #[AsMessageHandler] attribute.
+ * A build that fails exits this method by throwing, not by returning an
+ * error, and which exception type is thrown decides what Messenger does
+ * next:
+ *  - \InvalidArgumentException: e.g. an archive with no pages or a callback that rejects us.
+ *    Stops retry via an UnrecoverableMessageHandlingException so the transport reports it instead of retrying the build.
+ *  - \RuntimeException: the environment might differ next time (disk,
+ *    network, a half-finished swap). Retry via Messenger redelivery.
+ *
+ * BuildFailureHandler handles a failed build if retries are exhausted --
+ * Successfully built sites are handled here.
+ *
+ * @param ContentDownloader $contentDownloader The content downloader to use to download the content.
+ * @param ArchiveExtractor $archiveExtractor The archive extractor to use to extract the content.
+ * @param SiteRenderer $siteRenderer The site renderer to use to render the content.
+ * @param JobWorkspace $jobWorkspace The job workspace to use to manage the job workspace.
+ * @param StatusNotifier $statusNotifier The status notifier to use to notify the status of the build.
+ *
+ * Registered as a message handler in services.yaml rather than via
+ * #[AsMessageHandler], which pins it to the "builds" transport.
  */
 final class BuildJobHandler
 {
-    /** Folder where the archive is unpacked, relative to the job's input/ folder. */
-    public const UNARCHIVED_DIR = 'content_unarchived';
-
     public function __construct(
         private readonly ContentDownloader $contentDownloader,
         private readonly ArchiveExtractor $archiveExtractor,
         private readonly SiteRenderer $siteRenderer,
         private readonly JobWorkspace $jobWorkspace,
+        private readonly StatusNotifier $statusNotifier,
     ) {
     }
 
-    /**
-     * @throws \InvalidArgumentException if the static_site_id is unsafe
-     * @throws \RuntimeException         if any step fails
-     */
-    public function __invoke(BuildJob $message): void
+    public function __invoke(BuildJob $buildJob): void
     {
-        // Creates the job's input/output folders.
-        $jobDir = $this->jobWorkspace->createJobDirectories($message->static_site_id);
+        // build, publish and notify success are all inside the same try block to ensure that
+        // a failed build in any step is retried or handled as a failure by Messenger.
+        try {
+            $pageCount = $this->build($buildJob);
+            $this->jobWorkspace->publish($buildJob->build_id, $buildJob->static_site_id, $buildJob->slug);
+            $this->jobWorkspace->clear($buildJob->build_id);
 
-        error_log(sprintf('[INFO] prepared job workdir %s', $jobDir));
+            error_log(sprintf(
+                '[INFO] published %s/%s from build %s (%d page(s))',
+                $buildJob->static_site_id,
+                $buildJob->slug,
+                $buildJob->build_id,
+                $pageCount,
+            ));
 
-        $url = $message->content_download_url;
-        $inputDir = $jobDir . '/' . JobWorkspace::INPUT_DIR;
-        $file = $this->contentDownloader->download($url, $inputDir);
+            $this->statusNotifier->notifyPublished(
+                callbackStatusUrl: $buildJob->callback_status_url,
+                buildId: $buildJob->build_id,
+                publishUrl: $this->jobWorkspace->publishUrl($buildJob->static_site_id, $buildJob->slug),
+            );
+        } catch (\InvalidArgumentException $e) {
+            // Marked unrecoverable so the retry strategy is skipped entirely.
+            throw new UnrecoverableMessageHandlingException($e->getMessage(), 0, $e);
+        }
+    }
+
+    /** Download, extract, render. Everything before the site goes live. */
+    private function build(BuildJob $buildJob): int
+    {
+        /** Clear any previous attempt to avoid any mess when mixing up builds. */
+        $buildJobDir = $this->jobWorkspace->reset($buildJob->build_id);
+
+        error_log(sprintf('[INFO] prepared job workdir %s', $buildJobDir));
+
+        $buildJobInputDir = $this->jobWorkspace->buildJobInputDir($buildJob->build_id);
+        $archiveFile = $this->contentDownloader->download($buildJob->content_download_url, $buildJobInputDir);
 
         error_log(sprintf(
             '[INFO] downloaded %s to %s (%d bytes)',
-            $url,
-            $file,
-            (int) @filesize($file),
+            $buildJob->content_download_url,
+            $archiveFile,
+            (int) @filesize($archiveFile),
         ));
 
-        // Extracted content assets
-        $unarchivedDir = $inputDir . '/' . self::UNARCHIVED_DIR;
-        $this->archiveExtractor->extract($file, $unarchivedDir);
+        $buildJobUnarchivedDir = $this->jobWorkspace->buildJobUnarchivedDir($buildJob->build_id);
+        $this->archiveExtractor->extract($archiveFile, $buildJobUnarchivedDir);
 
-        error_log(sprintf('[INFO] extracted %s into %s', $file, $unarchivedDir));
+        error_log(sprintf('[INFO] extracted %s into %s', $archiveFile, $buildJobUnarchivedDir));
 
-        // slug is used as the site header on every page.
-        $outputDir = $jobDir . '/' . JobWorkspace::OUTPUT_DIR;
-        $pages = $this->siteRenderer->render($unarchivedDir, $outputDir, $message->slug);
+        $buildJobOutputDir = $this->jobWorkspace->buildJobOutputDir($buildJob->build_id);
+        $pageCount = $this->siteRenderer->render($buildJobUnarchivedDir, $buildJobOutputDir, $buildJob->title);
 
-        error_log(sprintf('[INFO] rendered %d page(s) into %s', $pages, $outputDir));
+        error_log(sprintf('[INFO] rendered %d page(s) into %s', $pageCount, $buildJobOutputDir));
+
+        return $pageCount;
     }
 }
