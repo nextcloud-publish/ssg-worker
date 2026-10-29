@@ -95,7 +95,7 @@ final class ContentDownloaderTest extends TestCase
     /**
      * Response statuses the downloader must treat as a failure.
      *
-     * @return array<string, array{int}> the status code per case name
+     * @return array<int, array{int}> the status code, keyed by itself
      */
     public static function provideErrorStatuses(): array
     {

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Job;
 
+use App\Tests\DecodesJson;
 use App\Job\StatusNotifier;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -22,6 +23,11 @@ use Symfony\Component\HttpClient\Response\MockResponse;
  */
 final class StatusNotifierTest extends TestCase
 {
+    use DecodesJson;
+
+    /** @var ?array{method: string, url: string, options: array<mixed>} */
+    private ?array $seenRequest = null;
+
     private const URL = 'https://cloud.example.org/collectives/publish/1234-5678';
     private const BUILD = '16ef078ad37fd894';
     private const PUBLISH_URL = 'https://sites.example.org/11f5b798-6f34-4951-ad8b-bfd623ded5c2/demo-site/';
@@ -70,68 +76,78 @@ final class StatusNotifierTest extends TestCase
     }
 
     /**
-     * Returns a client that records the options of the one request it receives into $seen.
+     * Returns a client that records the one request it receives, for seenRequest().
      *
-     * @param ?array<string, mixed> $seen Receives the method, url and options of the request.
      * @return MockHttpClient the recording client
      */
-    private function recordingClient(?array &$seen): MockHttpClient
+    private function recordingClient(): MockHttpClient
     {
-        return new MockHttpClient(function (string $method, string $url, array $options) use (&$seen): MockResponse {
-            $seen = ['method' => $method, 'url' => $url, 'options' => $options];
+        return new MockHttpClient(function (string $method, string $url, array $options): MockResponse {
+            $this->seenRequest = ['method' => $method, 'url' => $url, 'options' => $options];
 
             return new MockResponse('', ['http_code' => 200]);
         });
     }
 
+    /**
+     * Returns the request recordingClient() received.
+     *
+     * @return array{method: string, url: string, options: array<mixed>} the method, url and options of the request
+     */
+    private function seenRequest(): array
+    {
+        self::assertNotNull($this->seenRequest, 'the client received no request');
+
+        return $this->seenRequest;
+    }
+
     /** The published contract, specified in docs/build-pipeline.md; assertSame so no extra key can slip in. */
     public function testPostsStatusAndPublishUrlWhenPublished(): void
     {
-        $seen = null;
-
-        $this->notify($this->recordingClient($seen));
+        $this->notify($this->recordingClient());
+        $seen = $this->seenRequest();
 
         self::assertSame('PUT', $seen['method']);
         self::assertSame(self::URL, $seen['url']);
-        self::assertContains('Content-Type: application/json', $seen['options']['headers']);
+        $headers = $seen['options']['headers'] ?? null;
+        self::assertIsArray($headers);
+        self::assertContains('Content-Type: application/json', $headers);
         self::assertSame([
             'status' => 'published',
             'data' => ['publish_url' => self::PUBLISH_URL],
-        ], json_decode($seen['options']['body'], true));
+        ], self::decodeJson($seen['options']['body'] ?? null));
     }
 
     public function testPostsStatusAndErrorMessageWhenFailed(): void
     {
-        $seen = null;
-
-        $this->statusNotifier($this->recordingClient($seen))->notifyFailed(
+        $this->statusNotifier($this->recordingClient())->notifyFailed(
             callbackStatusUrl: self::URL,
             buildId: self::BUILD,
             errorMessage: 'Extracting failed: not in gzip format',
         );
+        $seen = $this->seenRequest();
 
         self::assertSame([
             'status' => 'failed',
             'data' => ['error_message' => 'Extracting failed: not in gzip format'],
-        ], json_decode($seen['options']['body'], true));
+        ], self::decodeJson($seen['options']['body'] ?? null));
     }
 
     public function testPassesTheConfiguredLimitsToTheRequest(): void
     {
-        $seen = null;
-
-        (new StatusNotifier($this->recordingClient($seen), timeoutSeconds: 7, maxDurationSeconds: 11, maxRedirects: 2))
+        (new StatusNotifier($this->recordingClient(), timeoutSeconds: 7, maxDurationSeconds: 11, maxRedirects: 2))
             ->notifyPublished(self::URL, self::BUILD, self::PUBLISH_URL);
+        $seen = $this->seenRequest();
 
-        self::assertEquals(7, $seen['options']['timeout']);
-        self::assertEquals(11, $seen['options']['max_duration']);
-        self::assertSame(2, $seen['options']['max_redirects']);
+        self::assertEquals(7, $seen['options']['timeout'] ?? null);
+        self::assertEquals(11, $seen['options']['max_duration'] ?? null);
+        self::assertSame(2, $seen['options']['max_redirects'] ?? null);
     }
 
     /**
      * Response codes that count as the callback being accepted.
      *
-     * @return array<string, array{int}> the status code per case name
+     * @return array<int, array{int}> the status code, keyed by itself
      */
     public static function provideSuccessCodes(): array
     {

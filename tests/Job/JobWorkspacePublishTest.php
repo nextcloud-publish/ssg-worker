@@ -327,7 +327,7 @@ final class JobWorkspacePublishTest extends TestCase
         $this->publishedOnOtherMount = '/dev/shm/worker-publish-' . bin2hex(random_bytes(6));
         mkdir($this->publishedOnOtherMount, 0o755, true);
 
-        if (stat($this->root)['dev'] === stat($this->publishedOnOtherMount)['dev']) {
+        if (self::deviceOf(sys_get_temp_dir()) === self::deviceOf($this->publishedOnOtherMount)) {
             self::markTestSkipped('/dev/shm shares a device with the temp dir');
         }
 
@@ -364,5 +364,19 @@ final class JobWorkspacePublishTest extends TestCase
 
         self::assertSame('second', file_get_contents($this->publishedSite() . '/index.html'));
         self::assertFileDoesNotExist($this->publishedSite() . '/gone-later.html');
+    }
+
+    /**
+     * Returns the device number of $path.
+     *
+     * @param string $path An existing path.
+     * @return int the device $path lives on
+     */
+    private static function deviceOf(string $path): int
+    {
+        $stat = stat($path);
+        self::assertIsArray($stat);
+
+        return $stat['dev'];
     }
 }

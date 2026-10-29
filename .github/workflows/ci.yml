@@ -67,6 +67,9 @@ jobs:
       - name: Lint service container
         run: php bin/console lint:container
 
+      - name: PHPStan
+        run: php bin/console cache:warmup --env=dev && vendor/bin/phpstan analyse --no-progress
+
   test:
     name: Tests
     runs-on: ubuntu-latest

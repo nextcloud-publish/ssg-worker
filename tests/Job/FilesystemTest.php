@@ -59,9 +59,7 @@ final class FilesystemTest extends TestCase
         $this->otherMount = '/dev/shm/worker-fs-test-' . bin2hex(random_bytes(6));
         mkdir($this->otherMount, 0o755, true);
 
-        $srcDev = stat($this->root)['dev'];
-        $dstDev = stat($this->otherMount)['dev'];
-        if ($srcDev === $dstDev) {
+        if (self::deviceOf($this->root) === self::deviceOf($this->otherMount)) {
             self::markTestSkipped('/dev/shm shares a device with the temp dir, so rename() would not fail');
         }
 
@@ -415,5 +413,19 @@ final class FilesystemTest extends TestCase
 
         self::assertSame($inode, fileinode($this->root . '/to'));
         self::assertDirectoryDoesNotExist($this->root . '/from');
+    }
+
+    /**
+     * Returns the device number of $path.
+     *
+     * @param string $path An existing path.
+     * @return int the device $path lives on
+     */
+    private static function deviceOf(string $path): int
+    {
+        $stat = stat($path);
+        self::assertIsArray($stat);
+
+        return $stat['dev'];
     }
 }

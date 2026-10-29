@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Message;
 
+use App\Tests\DecodesJson;
 use App\Job\JobWorkspace;
 use App\Job\StatusNotifier;
 use App\Message\BuildFailureHandler;
@@ -25,6 +26,8 @@ use Symfony\Component\Messenger\EventListener\SendFailedMessageForRetryListener;
  */
 final class BuildFailureHandlerTest extends TestCase
 {
+    use DecodesJson;
+
     private const SITE_ID = '11f5b798-6f34-4951-ad8b-bfd623ded5c2';
     private const BUILD_ID = '0199a1b2-3c4d-7e5f-8a9b-0c1d2e3f4a5b';
     private const SLUG = 'demo-site';
@@ -33,7 +36,7 @@ final class BuildFailureHandlerTest extends TestCase
     private string $root;
     private MockHttpClient $callbackClient;
 
-    /** @var list<array<string, mixed>> */
+    /** @var list<array<mixed>> */
     private array $callbacks = [];
     private string $logFile;
     private string|false $previousErrorLog;
@@ -43,7 +46,7 @@ final class BuildFailureHandlerTest extends TestCase
         $this->root = sys_get_temp_dir() . '/worker-failure-test-' . bin2hex(random_bytes(6));
 
         $this->callbackClient = new MockHttpClient(function (string $method, string $url, array $options): MockResponse {
-            $this->callbacks[] = json_decode($options['body'] ?? '{}', true);
+            $this->callbacks[] = self::decodeJson($options['body'] ?? null);
 
             return new MockResponse('', ['http_code' => 204]);
         });
@@ -207,7 +210,7 @@ final class BuildFailureHandlerTest extends TestCase
             $this->failedEvent(new \InvalidArgumentException('Status callback rejected with HTTP 404.')),
         );
 
-        self::assertSame('Status callback rejected with HTTP 404.', $this->callbacks[0]['data']['error_message']);
+        self::assertSame('Status callback rejected with HTTP 404.', $this->firstReportedError());
     }
 
     // --- redaction --------------------------------------------------------
@@ -227,7 +230,22 @@ final class BuildFailureHandlerTest extends TestCase
     {
         $this->buildFailureHandler()->onMessageFailed($this->failedEvent(new \RuntimeException($raw)));
 
-        return $this->callbacks[0]['data']['error_message'];
+        return $this->firstReportedError();
+    }
+
+    /**
+     * Returns the error message of the first callback.
+     *
+     * @return string the error_message the client received
+     */
+    private function firstReportedError(): string
+    {
+        $data = $this->callbacks[0]['data'] ?? null;
+        self::assertIsArray($data);
+        $errorMessage = $data['error_message'] ?? null;
+        self::assertIsString($errorMessage);
+
+        return $errorMessage;
     }
 
     public function testTheReportedReasonCarriesNoFilesystemPaths(): void
@@ -340,7 +358,7 @@ final class BuildFailureHandlerTest extends TestCase
 
         $handler->onMessageFailed($this->failedEvent(new \RuntimeException('at /opt/ssg/published/demo')));
 
-        self::assertStringContainsString('<published>', $this->callbacks[0]['data']['error_message']);
+        self::assertStringContainsString('<published>', $this->firstReportedError());
     }
 
     // --- what is left on disk ---------------------------------------------

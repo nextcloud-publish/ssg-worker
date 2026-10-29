@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Message;
 
+use App\Tests\DecodesJson;
 use App\Job\ArchiveExtractor;
 use App\Job\ContentDownloader;
 use App\Job\JobWorkspace;
@@ -30,6 +31,8 @@ use Symfony\Component\Messenger\Exception\UnrecoverableMessageHandlingException;
  */
 final class BuildJobHandlerTest extends TestCase
 {
+    use DecodesJson;
+
     private const SITE_ID = '11f5b798-6f34-4951-ad8b-bfd623ded5c2';
     private const BUILD_ID = '0199a1b2-3c4d-7e5f-8a9b-0c1d2e3f4a5b';
     private const SLUG = 'integration-test-collective';
@@ -45,7 +48,7 @@ final class BuildJobHandlerTest extends TestCase
     private MockHttpClient $client;
     private MockHttpClient $callbackClient;
 
-    /** @var list<array{url: string, body: array<string, mixed>}> */
+    /** @var list<array{url: string, body: array<mixed>}> */
     private array $callbacks = [];
     private string $logFile;
     private string|false $previousErrorLog;
@@ -63,7 +66,7 @@ final class BuildJobHandlerTest extends TestCase
         $this->client = new MockHttpClient(fn (): MockResponse => new MockResponse($this->archiveBytes));
 
         $this->callbackClient = new MockHttpClient(function (string $method, string $url, array $options): MockResponse {
-            $this->callbacks[] = ['url' => $url, 'body' => json_decode($options['body'] ?? '{}', true)];
+            $this->callbacks[] = ['url' => $url, 'body' => self::decodeJson($options['body'] ?? null)];
 
             return new MockResponse('', ['http_code' => 204]);
         });
@@ -219,7 +222,7 @@ final class BuildJobHandlerTest extends TestCase
     /**
      * Asserts exactly one callback was sent and returns its body.
      *
-     * @return array<string, mixed> the decoded callback body
+     * @return array<mixed> the decoded callback body
      */
     private function onlyCallback(): array
     {

@@ -1,0 +1,12 @@
+includes:
+    - vendor/phpstan/phpstan-symfony/extension.neon
+    - vendor/phpstan/phpstan-phpunit/extension.neon
+
+parameters:
+    level: 10
+    paths:
+        - src
+        - tests
+    symfony:
+        # Written by the dev kernel; `php bin/console cache:warmup` creates it.
+        containerXmlPath: var/cache/dev/App_KernelDevDebugContainer.xml

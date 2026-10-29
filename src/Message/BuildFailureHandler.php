@@ -53,7 +53,7 @@ final class BuildFailureHandler implements EventSubscriberInterface
      * Subscribes to the WorkerMessageFailedEvent to handle build failures with the onMessageFailed method.
      * Setting a low priority ensures that the message is handled after the SendFailedMessageForRetryListener has had a chance to set the retry flag.
      *
-     * @return array<string, array<string, string|int>> The subscribed events and the method to call with which priority.
+     * @return array<string, array{string, int}> the method to call and its priority, per event
      */
     public static function getSubscribedEvents(): array
     {
