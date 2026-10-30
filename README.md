@@ -174,6 +174,22 @@ kills the worker mid-build, the message is redelivered, and a build attempt is s
 so the `/ssg-worker` bind mount does not shadow it. Rebuild with `--build` after changing
 `composer.json`.
 
+## Images
+
+CI pushes the image to `ghcr.io/nextcloud-publish/ssg-worker`, built from stage `release`:
+
+| Tag | Points to |
+| --- | --- |
+| `latest` | the newest release |
+| `1`, `1.2` | the newest release of that major or minor version (no `0` during 0.x) |
+| `1.2.3` | one release |
+| `main` | the newest build of `main` |
+| `<branch>` | the newest build of a pull request from that branch; `/` becomes `-` |
+| `sha-<commit>` | the build of one commit |
+
+A release is a git tag like `1.2.3`, without a leading `v`, pushed to `main`. It must match
+the version in `CHANGELOG.md`.
+
 ## Tests
 
 ```bash
