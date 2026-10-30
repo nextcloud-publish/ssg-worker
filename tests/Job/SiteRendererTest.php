@@ -8,9 +8,10 @@ use App\Job\SiteRenderer;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Uses the real ssg-library instead of a mock: it only reads and writes
- * directories, so running it is cheap and checks the actual building process
- * and the result.
+ * Covers App\Job\SiteRenderer.
+ *
+ * Uses the real ssg-library rather than a mock. It only reads and writes directories, so
+ * running it is cheap and checks the actual build and its result.
  */
 final class SiteRendererTest extends TestCase
 {
@@ -51,10 +52,9 @@ final class SiteRendererTest extends TestCase
         self::assertStringContainsString('<strong>bold</strong>', $html);
     }
 
+    /** The heading comes from BuildJob::$title. Without this the header would read the library's default on every published site. */
     public function testPutsTheGivenSiteTitleOnThePage(): void
     {
-        // The title comes from the job message's slug; without this the header
-        // would silently read "Collectives lab" on every published site.
         (new SiteRenderer())->render($this->pagesDir, $this->outputDir, 'my_collective');
 
         self::assertStringContainsString(
@@ -63,32 +63,37 @@ final class SiteRendererTest extends TestCase
         );
     }
 
+    /** The library copies these out of its own src/. A vendored install missing them renders an unstyled site rather than failing. */
     public function testCopiesTheStylesheetAndThemeScript(): void
     {
-        // The library copies these out of its own src/. A vendored install
-        // missing them would render an unstyled site rather than fail loudly.
         (new SiteRenderer())->render($this->pagesDir, $this->outputDir, 'my_collective');
 
         self::assertFileExists($this->outputDir . '/style.css');
         self::assertFileExists($this->outputDir . '/theme.js');
     }
 
-    public function testThrowsWhenThePagesDirectoryIsMissing(): void
-    {
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('Pages directory not found');
-
-        (new SiteRenderer())->render($this->tmp . '/nope', $this->outputDir, 'my_collective');
-    }
-
-    public function testThrowsWhenThereIsNothingToRender(): void
+    /**
+     * InvalidArgumentException, not RuntimeException, and the retry budget turns on the difference.
+     * An archive with no pages renders the same nothing however often it is fetched, so the client is told at once.
+     */
+    public function testAnArchiveWithNoPagesIsATerminalContentError(): void
     {
         $empty = $this->tmp . '/empty';
         mkdir($empty, 0o755, true);
 
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('No .md files found');
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('no .md file found');
 
         (new SiteRenderer())->render($empty, $this->outputDir, 'my_collective');
+    }
+
+    /** Collectives exports put pages in subdirectories, so only a tree with no .md at all is a content error. */
+    public function testAPageInASubdirectoryIsEnoughToRender(): void
+    {
+        $nested = $this->tmp . '/nested';
+        mkdir($nested . '/Cats', 0o755, true);
+        file_put_contents($nested . '/Cats/index.md', "# Cats\n");
+
+        self::assertGreaterThan(0, (new SiteRenderer())->render($nested, $this->outputDir, 'my_collective'));
     }
 }

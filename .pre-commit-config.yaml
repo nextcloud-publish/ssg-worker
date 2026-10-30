@@ -1,0 +1,66 @@
+# The local hooks are the lint and test jobs of .github/workflows/ci.yml, run on the host.
+# Needs PHP 8.5 and `composer install`. Set up once with `pre-commit install`.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        # Two trailing spaces are a line break in Markdown.
+        args: [--markdown-linebreak-ext=md]
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  - repo: local
+    hooks:
+      - id: composer-validate
+        name: composer validate
+        entry: composer validate --strict --no-check-publish
+        language: system
+        files: ^composer\.(json|lock)$
+        pass_filenames: false
+
+      - id: composer-audit
+        name: composer audit
+        entry: composer audit --locked
+        language: system
+        files: ^composer\.lock$
+        pass_filenames: false
+
+      - id: php-lint
+        name: PHP syntax
+        entry: php -l
+        language: system
+        files: \.php$
+
+      - id: lint-yaml
+        name: Lint YAML config
+        entry: php bin/console lint:yaml config
+        language: system
+        files: ^config/.*\.yaml$
+        pass_filenames: false
+
+      - id: lint-container
+        name: Lint service container
+        entry: php bin/console lint:container
+        language: system
+        files: ^(config/|src/|composer\.lock$)
+        pass_filenames: false
+
+      - id: phpstan
+        name: PHPStan
+        entry: sh -c 'php bin/console cache:warmup --env=dev -q && vendor/bin/phpstan analyse --no-progress'
+        language: system
+        files: ^(config/|src/|tests/|composer\.lock$|phpstan\.dist\.neon$)
+        pass_filenames: false
+
+      - id: phpunit
+        name: PHPUnit
+        entry: vendor/bin/phpunit
+        language: system
+        files: ^(config/|src/|tests/|composer\.lock$|\.env)
+        pass_filenames: false

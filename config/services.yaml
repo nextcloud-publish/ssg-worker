@@ -4,6 +4,17 @@
 # Files in the packages/ subdirectory configure your dependencies.
 # See also https://symfony.com/doc/current/service_container/import.html
 parameters:
+    # Defaults for the storage roots: their fixed locations inside the container. Set them for a deployment outside Docker.
+    env(JOB_STORAGE_DIR): '/opt/ssg/build_temp'
+    env(PUBLISHED_DIR): '/opt/ssg/published'
+    # Defaults for the status callback options, used when the env var is not set.
+    env(CALLBACK_TIMEOUT_SECONDS): '5'
+    env(CALLBACK_MAX_DURATION_SECONDS): '10'
+    env(CALLBACK_MAX_REDIRECTS): '0'
+    # Defaults for the content download options, used when the env var is not set.
+    env(DOWNLOAD_MAX_DURATION_SECONDS): '300'
+    env(DOWNLOAD_TIMEOUT_SECONDS): '30'
+    env(DOWNLOAD_MAX_REDIRECTS): '3'
 
 services:
     # default configuration for services in *this* file
@@ -19,30 +30,54 @@ services:
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones
 
-    # Explicit instead of #[AsMessageHandler]: pins the handler to the
-    # "builds" transport (from_transport) so it can never fire for a BuildJob
-    # arriving anywhere else, and keeps the message-class -> handler link
-    # readable here instead of via reflection on __invoke()'s parameter.
+    # Registered here rather than via #[AsMessageHandler] to pin it to the "builds" transport.
     App\Message\BuildJobHandler:
         tags:
             - { name: messenger.message_handler, handles: App\Message\BuildJob, from_transport: builds }
 
+    # PUBLISH_BASE_URL has no default: it is the public URL of the deployment.
     App\Job\JobWorkspace:
         arguments:
-            # Root of the volume shared with publish. No default: it must be
-            # the same directory publish uses, so a missing variable has to
-            # fail loudly rather than send builds somewhere nothing looks.
-            # Set in integration-test/docker-compose.yml.
-            $baseDir: '%env(JOB_STORAGE_DIR)%'
+            $buildTempDir: '%env(JOB_STORAGE_DIR)%'
+            $publishedDir: '%env(PUBLISHED_DIR)%'
+            $publishBaseUrl: '%env(PUBLISH_BASE_URL)%'
+
+    # Needs the two roots to redact them from failure messages.
+    App\Message\BuildFailureHandler:
+        arguments:
+            $buildTempDir: '%env(JOB_STORAGE_DIR)%'
+            $publishedDir: '%env(PUBLISHED_DIR)%'
+
+    # The PUT runs while the message is unacked, so keep these well below consumer_timeout.
+    App\Job\StatusNotifier:
+        arguments:
+            $httpClient: '@app.http_client.no_private_network'
+            $timeoutSeconds: '%env(int:CALLBACK_TIMEOUT_SECONDS)%'
+            $maxDurationSeconds: '%env(int:CALLBACK_MAX_DURATION_SECONDS)%'
+            $maxRedirects: '%env(int:CALLBACK_MAX_REDIRECTS)%'
+
+    # Refuses requests to private addresses, also after redirects and DNS resolution.
+    app.http_client.no_private_network:
+        class: Symfony\Component\HttpClient\NoPrivateNetworkHttpClient
+        arguments: ['@http_client']
+
     App\Job\ContentDownloader:
         arguments:
-            # In megabytes. No fallback: the cap protects a volume shared with
-            # publish and every other job, so a deployment that forgets to set
-            # it should fail loudly rather than have a limit guessed for it.
-            # Set in integration-test/docker-compose.yml.
+            # No default: the cap keeps one job from filling the shared build volume.
             $maxMegabytes: '%env(int:MAX_DOWNLOAD_MB)%'
-            # HTTP client tuning for fetching the content archive; see
-            # ContentDownloader for what each one guards against.
-            $maxDurationSeconds: 300
-            $timeoutSeconds: 30
-            $maxRedirects: 3
+            $maxDurationSeconds: '%env(int:DOWNLOAD_MAX_DURATION_SECONDS)%'
+            $timeoutSeconds: '%env(int:DOWNLOAD_TIMEOUT_SECONDS)%'
+            $maxRedirects: '%env(int:DOWNLOAD_MAX_REDIRECTS)%'
+
+when@dev:
+    services:
+        # The dev callback endpoint (collectives-mock) has a private Docker address.
+        app.http_client.no_private_network:
+            alias: http_client
+
+when@test:
+    services:
+        # Lets MessengerConfigTest read the retry strategy the container built.
+        test.retry_strategy.builds:
+            alias: messenger.retry.multiplier_retry_strategy.builds
+            public: true
