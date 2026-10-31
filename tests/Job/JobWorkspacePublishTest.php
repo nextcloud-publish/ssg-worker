@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Job;
 
+use App\Job\Filesystem;
 use App\Job\JobWorkspace;
 use PHPUnit\Framework\TestCase;
 
@@ -35,6 +36,7 @@ final class JobWorkspacePublishTest extends TestCase
         $this->root = sys_get_temp_dir() . '/worker-publish-test-' . bin2hex(random_bytes(6));
 
         $this->workspace = new JobWorkspace(
+            new Filesystem(),
             $this->root . '/build_temp',
             $this->root . '/published',
             'http://sites.test',
@@ -332,6 +334,7 @@ final class JobWorkspacePublishTest extends TestCase
         }
 
         $this->workspace = new JobWorkspace(
+            new Filesystem(),
             $this->root . '/build_temp',
             $this->publishedOnOtherMount,
             'http://sites.test',

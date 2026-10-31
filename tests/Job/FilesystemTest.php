@@ -18,6 +18,7 @@ use PHPUnit\Framework\TestCase;
  */
 final class FilesystemTest extends TestCase
 {
+    private Filesystem $filesystem;
     private string $root;
     private ?string $otherMount = null;
     private string $logFile;
@@ -25,6 +26,7 @@ final class FilesystemTest extends TestCase
 
     protected function setUp(): void
     {
+        $this->filesystem = new Filesystem();
         $this->root = sys_get_temp_dir() . '/worker-fs-test-' . bin2hex(random_bytes(6));
         mkdir($this->root, 0o755, true);
 
@@ -96,7 +98,7 @@ final class FilesystemTest extends TestCase
     {
         $this->givenTree($this->root . '/from');
 
-        Filesystem::copyDir($this->root . '/from', $this->root . '/to');
+        $this->filesystem->copyDir($this->root . '/from', $this->root . '/to');
 
         self::assertSame('root page', file_get_contents($this->root . '/to/index.html'));
         self::assertSame('nested page', file_get_contents($this->root . '/to/nested/page.html'));
@@ -112,7 +114,7 @@ final class FilesystemTest extends TestCase
     {
         $this->givenTree($this->root . '/from');
 
-        Filesystem::copyDir($this->root . '/from', $this->root . '/to');
+        $this->filesystem->copyDir($this->root . '/from', $this->root . '/to');
 
         self::assertFileExists($this->root . '/from/index.html');
     }
@@ -129,7 +131,7 @@ final class FilesystemTest extends TestCase
         chmod($this->root . '/from/nested', 0o750);
         chmod($this->root . '/from', 0o711);
 
-        Filesystem::copyDir($this->root . '/from', $this->root . '/to');
+        $this->filesystem->copyDir($this->root . '/from', $this->root . '/to');
 
         self::assertSame(0o711, fileperms($this->root . '/to') & 0o777);
         self::assertSame(0o750, fileperms($this->root . '/to/nested') & 0o777);
@@ -150,14 +152,14 @@ final class FilesystemTest extends TestCase
         chmod($this->root . '/from', 0o750);
 
         /** Same mount: rename, which preserves modes by definition. */
-        Filesystem::moveDir($this->root . '/from', $this->root . '/renamed');
+        $this->filesystem->moveDir($this->root . '/from', $this->root . '/renamed');
 
         $this->givenTree($this->root . '/from2');
         chmod($this->root . '/from2/nested', 0o750);
         chmod($this->root . '/from2', 0o750);
 
         /** Different mount: the copy fallback. */
-        Filesystem::moveDir($this->root . '/from2', $other . '/copied');
+        $this->filesystem->moveDir($this->root . '/from2', $other . '/copied');
 
         self::assertSame(
             fileperms($this->root . '/renamed') & 0o777,
@@ -179,7 +181,7 @@ final class FilesystemTest extends TestCase
         chmod($this->root . '/from/index.html', 0o640);
         chmod($this->root . '/from/nested/page.html', 0o600);
 
-        Filesystem::copyDir($this->root . '/from', $this->root . '/to');
+        $this->filesystem->copyDir($this->root . '/from', $this->root . '/to');
 
         self::assertSame(0o640, fileperms($this->root . '/to/index.html') & 0o777);
         self::assertSame(0o600, fileperms($this->root . '/to/nested/page.html') & 0o777);
@@ -193,7 +195,7 @@ final class FilesystemTest extends TestCase
         file_put_contents($this->root . '/outside.txt', 'should not be published');
         symlink($this->root . '/outside.txt', $this->root . '/from/escape.html');
 
-        Filesystem::copyDir($this->root . '/from', $this->root . '/to');
+        $this->filesystem->copyDir($this->root . '/from', $this->root . '/to');
 
         self::assertFileExists($this->root . '/to/real.html');
         self::assertFileDoesNotExist($this->root . '/to/escape.html');
@@ -213,7 +215,7 @@ final class FilesystemTest extends TestCase
         chmod($this->root . '/tree/index.html', 0o600);
         chmod($this->root . '/tree/nested/deeper/leaf.html', 0o777);
 
-        Filesystem::setFileAccess($this->root . '/tree', 0o755, 0o644);
+        $this->filesystem->setFileAccess($this->root . '/tree', 0o755, 0o644);
 
         /** The root itself, not just what is under it. */
         self::assertSame(0o755, fileperms($this->root . '/tree') & 0o777);
@@ -237,7 +239,7 @@ final class FilesystemTest extends TestCase
         chmod($this->root . '/outside.txt', 0o600);
         symlink($this->root . '/outside.txt', $this->root . '/tree/link.txt');
 
-        Filesystem::setFileAccess($this->root . '/tree', 0o755, 0o644);
+        $this->filesystem->setFileAccess($this->root . '/tree', 0o755, 0o644);
 
         self::assertSame(0o600, fileperms($this->root . '/outside.txt') & 0o777);
         self::assertStringContainsString('skipping symlink', (string) file_get_contents($this->logFile));
@@ -250,7 +252,7 @@ final class FilesystemTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('not a directory');
 
-        Filesystem::setFileAccess($this->root . '/afile', 0o755, 0o644);
+        $this->filesystem->setFileAccess($this->root . '/afile', 0o755, 0o644);
     }
 
     /** "nosuchuser!" cannot resolve, which is the same failure an unprivileged worker hits. */
@@ -261,7 +263,7 @@ final class FilesystemTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('Could not set owner');
 
-        Filesystem::setFileAccess($this->root . '/tree', 0o755, 0o644, 'nosuchuser!');
+        $this->filesystem->setFileAccess($this->root . '/tree', 0o755, 0o644, 'nosuchuser!');
     }
 
     // --- removeDir --------------------------------------------------------
@@ -274,14 +276,14 @@ final class FilesystemTest extends TestCase
     {
         $this->givenTree($this->root . '/tree');
 
-        self::assertTrue(Filesystem::removeDir($this->root . '/tree'));
+        self::assertTrue($this->filesystem->removeDir($this->root . '/tree'));
         self::assertDirectoryDoesNotExist($this->root . '/tree');
     }
 
     /** reset() relies on this: nothing to remove is not a failure. */
     public function testRemoveDirReportsSuccessWhenThereIsNothingThere(): void
     {
-        self::assertTrue(Filesystem::removeDir($this->root . '/never-existed'));
+        self::assertTrue($this->filesystem->removeDir($this->root . '/never-existed'));
     }
 
     /**
@@ -299,7 +301,7 @@ final class FilesystemTest extends TestCase
         symlink($this->root . '/outside/keep', $this->root . '/tree/link-to-dir');
         symlink($this->root . '/outside/loose.txt', $this->root . '/tree/link-to-file');
 
-        self::assertTrue(Filesystem::removeDir($this->root . '/tree'));
+        self::assertTrue($this->filesystem->removeDir($this->root . '/tree'));
 
         /** The tree and both links are gone. */
         self::assertDirectoryDoesNotExist($this->root . '/tree');
@@ -323,7 +325,7 @@ final class FilesystemTest extends TestCase
         chmod($this->root . '/tree/locked', 0o500);
 
         try {
-            self::assertFalse(Filesystem::removeDir($this->root . '/tree'));
+            self::assertFalse($this->filesystem->removeDir($this->root . '/tree'));
             self::assertFileExists($this->root . '/tree/locked/stuck.txt');
         } finally {
             chmod($this->root . '/tree/locked', 0o755);
@@ -342,7 +344,7 @@ final class FilesystemTest extends TestCase
         $this->givenTree($this->root . '/precious');
         symlink($this->root . '/precious', $this->root . '/link');
 
-        self::assertTrue(Filesystem::removeDir($this->root . '/link'));
+        self::assertTrue($this->filesystem->removeDir($this->root . '/link'));
 
         self::assertFalse(is_link($this->root . '/link'));
         self::assertDirectoryExists($this->root . '/precious');
@@ -356,7 +358,7 @@ final class FilesystemTest extends TestCase
         symlink($this->root . '/precious', $this->root . '/link');
 
         try {
-            Filesystem::setFileAccess($this->root . '/link', 0o700, 0o600);
+            $this->filesystem->setFileAccess($this->root . '/link', 0o700, 0o600);
             self::fail('Expected a symlinked root to be refused.');
         } catch (\RuntimeException $e) {
             self::assertStringContainsString('symlink', $e->getMessage());
@@ -374,7 +376,7 @@ final class FilesystemTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('symlink');
 
-        Filesystem::copyDir($this->root . '/link', $this->root . '/to');
+        $this->filesystem->copyDir($this->root . '/link', $this->root . '/to');
     }
 
     // --- the cross-mount path ---------------------------------------------
@@ -394,7 +396,7 @@ final class FilesystemTest extends TestCase
         $other = $this->onAnotherMount();
         $this->givenTree($this->root . '/from');
 
-        Filesystem::moveDir($this->root . '/from', $other . '/to');
+        $this->filesystem->moveDir($this->root . '/from', $other . '/to');
 
         self::assertSame('root page', file_get_contents($other . '/to/index.html'));
         self::assertSame('leaf page', file_get_contents($other . '/to/nested/deeper/leaf.html'));
@@ -409,7 +411,7 @@ final class FilesystemTest extends TestCase
         $this->givenTree($this->root . '/from');
         $inode = fileinode($this->root . '/from');
 
-        Filesystem::moveDir($this->root . '/from', $this->root . '/to');
+        $this->filesystem->moveDir($this->root . '/from', $this->root . '/to');
 
         self::assertSame($inode, fileinode($this->root . '/to'));
         self::assertDirectoryDoesNotExist($this->root . '/from');

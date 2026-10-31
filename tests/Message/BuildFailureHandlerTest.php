@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Message;
 
 use App\Tests\DecodesJson;
+use App\Job\Filesystem;
 use App\Job\JobWorkspace;
 use App\Job\StatusNotifier;
 use App\Message\BuildFailureHandler;
@@ -82,7 +83,7 @@ final class BuildFailureHandlerTest extends TestCase
      */
     private function jobWorkspace(): JobWorkspace
     {
-        return new JobWorkspace($this->buildTemp(), $this->root . '/published', 'http://sites.test');
+        return new JobWorkspace(new Filesystem(), $this->buildTemp(), $this->root . '/published', 'http://sites.test');
     }
 
     /**

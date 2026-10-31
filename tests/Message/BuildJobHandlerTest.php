@@ -7,6 +7,7 @@ namespace App\Tests\Message;
 use App\Tests\DecodesJson;
 use App\Job\ArchiveExtractor;
 use App\Job\ContentDownloader;
+use App\Job\Filesystem;
 use App\Job\JobWorkspace;
 use App\Job\SiteRenderer;
 use App\Job\StatusNotifier;
@@ -115,7 +116,7 @@ final class BuildJobHandlerTest extends TestCase
      */
     private function jobWorkspace(): JobWorkspace
     {
-        return new JobWorkspace($this->buildTemp(), $this->publishedRoot(), 'http://sites.test');
+        return new JobWorkspace(new Filesystem(), $this->buildTemp(), $this->publishedRoot(), 'http://sites.test');
     }
 
     /**
@@ -150,7 +151,7 @@ final class BuildJobHandlerTest extends TestCase
 
         return new BuildJobHandler(
             new ContentDownloader($contentClient ?? $this->client, maxMegabytes: 1, maxDurationSeconds: 300, timeoutSeconds: 30, maxRedirects: 3),
-            new ArchiveExtractor(),
+            new ArchiveExtractor(new Filesystem()),
             new SiteRenderer(),
             $workspace,
             new StatusNotifier($this->callbackClient, timeoutSeconds: 5, maxDurationSeconds: 10, maxRedirects: 0),

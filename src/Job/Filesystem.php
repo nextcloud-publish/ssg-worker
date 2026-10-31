@@ -18,7 +18,7 @@ final class Filesystem
      * @return void
      * @throws \RuntimeException if $dir does not exist and cannot be created
      */
-    public static function ensureDir(string $dir, int $mode): void
+    public function ensureDir(string $dir, int $mode): void
     {
         if (is_dir($dir)) {
             return;
@@ -37,13 +37,13 @@ final class Filesystem
 
     /**
      * Renames a directory from $from to $to.
-     * 
+     *
      * @param string $from The directory to move from.
      * @param string $to The directory to move to.
      * @return void
      * @throws \RuntimeException with the reason if the rename fails
      */
-    public static function rename(string $from, string $to): void
+    public function rename(string $from, string $to): void
     {
         if (@rename($from, $to)) {
             return;
@@ -54,7 +54,7 @@ final class Filesystem
 
     /**
      * Moves a directory in an and across different mount points.
-     * 
+     *
      * First try a rename but in case of cross-mount that might fail.
      * Then fallback to a copy+remove to avoid leaving a dangling directory.
      *
@@ -63,15 +63,15 @@ final class Filesystem
      * @return void
      * @throws \RuntimeException with the reason if the move fails
      */
-    public static function moveDir(string $from, string $to): void
+    public function moveDir(string $from, string $to): void
     {
         if (@rename($from, $to)) {
             return;
         }
 
-        self::copyDir($from, $to);
+        $this->copyDir($from, $to);
 
-        if (!self::removeDir($from)) {
+        if (!$this->removeDir($from)) {
             error_log(sprintf('[WARN] copied %s to %s but could not remove the source', $from, $to));
         }
     }
@@ -86,7 +86,7 @@ final class Filesystem
      * @throws \RuntimeException if $from is not a directory, a directory cannot be created,
      *                           or a file cannot be copied
      */
-    public static function copyDir(string $from, string $to): void
+    public function copyDir(string $from, string $to): void
     {
         if (is_link($from)) {
             throw new \RuntimeException(sprintf('Refusing to copy through the symlink %s.', $from));
@@ -96,7 +96,7 @@ final class Filesystem
             throw new \RuntimeException(sprintf('Cannot copy %s: not a directory.', $from));
         }
 
-        self::ensureDir($to, fileperms($from) & 0o777);
+        $this->ensureDir($to, fileperms($from) & 0o777);
 
         $entries = new \RecursiveIteratorIterator(
             new \RecursiveDirectoryIterator($from, \FilesystemIterator::SKIP_DOTS),
@@ -113,7 +113,7 @@ final class Filesystem
                 error_log(sprintf('[WARN] skipping symlink %s while copying %s', $entry->getPathname(), $from));
             } elseif ($entry->isDir()) {
                 // getPerms() carries the file-type bits too, so mask them off.
-                self::ensureDir($target, $entry->getPerms() & 0o777);
+                $this->ensureDir($target, $entry->getPerms() & 0o777);
             } else {
                 $copied = @copy($entry->getPathname(), $target);
 
@@ -133,7 +133,7 @@ final class Filesystem
      *
      * $owner and $group default to null, meaning "leave alone".
      * Setting either needs CAP_CHOWN, so they only work where the worker runs as root.
-     * 
+     *
      * @param string $dir The directory to set the file access for.
      * @param int $dirMode The mode to set for the directory.
      * @param int $fileMode The mode to set for the files.
@@ -142,7 +142,7 @@ final class Filesystem
      * @return void
      * @throws \RuntimeException if $dir is not a directory, or any chmod/chown/chgrp fails
      */
-    public static function setFileAccess(string $dir, int $dirMode, int $fileMode, ?string $owner = null, ?string $group = null): void
+    public function setFileAccess(string $dir, int $dirMode, int $fileMode, ?string $owner = null, ?string $group = null): void
     {
         // is_dir() resolves symlinks, so this would otherwise chmod/chown the
         // tree the link points at. Refused rather than unlinked: nothing here
@@ -155,7 +155,7 @@ final class Filesystem
             throw new \RuntimeException(sprintf('Cannot set file access on %s: not a directory.', $dir));
         }
 
-        self::applyFileAccessTo($dir, $dirMode, $owner, $group);
+        $this->applyFileAccessTo($dir, $dirMode, $owner, $group);
 
         $entries = new \RecursiveIteratorIterator(
             new \RecursiveDirectoryIterator($dir, \FilesystemIterator::SKIP_DOTS),
@@ -169,14 +169,14 @@ final class Filesystem
             if ($entry->isLink()) {
                 error_log(sprintf('[WARN] skipping symlink %s while setting permissions', $entry->getPathname()));
             } else {
-                self::applyFileAccessTo($entry->getPathname(), $entry->isDir() ? $dirMode : $fileMode, $owner, $group);
+                $this->applyFileAccessTo($entry->getPathname(), $entry->isDir() ? $dirMode : $fileMode, $owner, $group);
             }
         }
     }
 
     /**
      * Applies $mode, $owner, and $group to dir or file at $path.
-     * 
+     *
      * @param string $path The path to apply the file access to.
      * @param int $mode The mode to set for the directory or file.
      * @param ?string $owner The owner to set for the directory or file.
@@ -184,7 +184,7 @@ final class Filesystem
      * @return void
      * @throws \RuntimeException if any of the three cannot be applied
      */
-    private static function applyFileAccessTo(string $path, int $mode, ?string $owner, ?string $group): void
+    private function applyFileAccessTo(string $path, int $mode, ?string $owner, ?string $group): void
     {
         $modeSet = @chmod($path, $mode);
 
@@ -213,11 +213,11 @@ final class Filesystem
     /**
      * Recursively deletes $dir.
      * Returns false when deletetion of $dir fails which can be caused by a failure deleting files/folders inside $dir.
-     * 
+     *
      * @param string $dir The directory to delete.
      * @return bool true when $dir is deleted, false when deletion fails
      */
-    public static function removeDir(string $dir): bool
+    public function removeDir(string $dir): bool
     {
         // is_dir() resolves symlinks. We simply unlink them.
         if (is_link($dir)) {
@@ -251,13 +251,13 @@ final class Filesystem
         return @rmdir($dir);
     }
 
-    /** 
+    /**
      * True when $dir holds no entries other than . and ..
-     * 
+     *
      * @param string $dir The directory to check if it is empty.
      * @return bool true when $dir is empty, false when it is not
      */
-    public static function isEmptyDir(string $dir): bool
+    public function isEmptyDir(string $dir): bool
     {
         if (!is_dir($dir)) {
             return true;

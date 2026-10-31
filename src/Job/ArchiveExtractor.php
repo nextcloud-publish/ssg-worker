@@ -11,6 +11,8 @@ namespace App\Job;
  * The archive is assumed to be a gzipped tar; nothing validates that before the tar command is called.
  *
  * Known limitation: does not guard against a hostile archive -- path traversal, symlinks and decompression bombs all pass.
+ *
+ * @param Filesystem $filesystem The filesystem operations to create the target with.
  */
 final class ArchiveExtractor
 {
@@ -25,6 +27,11 @@ final class ArchiveExtractor
     private const MAX_TAR_OUTPUT_LINES = 5;
     private const MAX_TAR_OUTPUT_CHARS = 1000;
 
+    public function __construct(
+        private readonly Filesystem $filesystem,
+    ) {
+    }
+
     /**
      * Unpacks a job's downloaded content archive into $targetDir, creating it if needed.
      *
@@ -35,7 +42,7 @@ final class ArchiveExtractor
      */
     public function extract(string $archiveFile, string $targetDir): void
     {
-        Filesystem::ensureDir($targetDir, self::EXTRACT_DIR_MODE);
+        $this->filesystem->ensureDir($targetDir, self::EXTRACT_DIR_MODE);
 
         // Captures tar's own error message for the exception below.
         exec(

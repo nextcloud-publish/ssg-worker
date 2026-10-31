@@ -22,6 +22,7 @@ namespace App\Job;
  *     {staticSiteId}/                  publishSiteDir(), replaced by the staged {buildId}/, holds only the current slug
  *       {slug}/                        the live site, served at publishUrl()
  *
+ * @param Filesystem $filesystem The filesystem operations to run the layout with.
  * @param string $buildTempDir The directory to store the build temporary files.
  * @param string $publishedDir The directory to store the published files.
  * @param string $publishBaseUrl The public URL the published directory is served at.
@@ -38,6 +39,7 @@ final class JobWorkspace
     private const PUBLISHED_FILE_MODE = 0o644;
 
     public function __construct(
+        private readonly Filesystem $filesystem,
         private readonly string $buildTempDir,
         private readonly string $publishedDir,
         private readonly string $publishBaseUrl,
@@ -108,8 +110,8 @@ final class JobWorkspace
                 'Could not clear the previous attempt at %s', $buildJobDir));
         }
 
-        Filesystem::ensureDir($this->buildJobInputDir($buildId), self::BUILD_JOB_DIR_MODE);
-        Filesystem::ensureDir($this->buildJobOutputDir($buildId), self::BUILD_JOB_DIR_MODE);
+        $this->filesystem->ensureDir($this->buildJobInputDir($buildId), self::BUILD_JOB_DIR_MODE);
+        $this->filesystem->ensureDir($this->buildJobOutputDir($buildId), self::BUILD_JOB_DIR_MODE);
 
         return $buildJobDir;
     }
@@ -137,23 +139,23 @@ final class JobWorkspace
                 'Nothing to publish for build %s of site %s: no build output at %s.',$buildId, $staticSiteId, $buildJobOutputDir));
         }
 
-        if (Filesystem::isEmptyDir($buildJobOutputDir)) {
+        if ($this->filesystem->isEmptyDir($buildJobOutputDir)) {
             throw new \InvalidArgumentException(
                 sprintf('Refusing to publish build %s: it rendered no pages.', $buildId));
         }
 
-        Filesystem::removeDir($publishStagingDir);
-        Filesystem::ensureDir($publishStagingDir, self::PUBLISHED_DIR_MODE);
-        Filesystem::moveDir($buildJobOutputDir, $publishStagingDir . '/' . $slug);
+        $this->filesystem->removeDir($publishStagingDir);
+        $this->filesystem->ensureDir($publishStagingDir, self::PUBLISHED_DIR_MODE);
+        $this->filesystem->moveDir($buildJobOutputDir, $publishStagingDir . '/' . $slug);
 
-        Filesystem::setFileAccess(
+        $this->filesystem->setFileAccess(
             $publishStagingDir,
             dirMode: self::PUBLISHED_DIR_MODE,
             fileMode: self::PUBLISHED_FILE_MODE,
         );
 
-        Filesystem::removeDir($publishSiteDir);
-        Filesystem::rename($publishStagingDir, $publishSiteDir);
+        $this->filesystem->removeDir($publishSiteDir);
+        $this->filesystem->rename($publishStagingDir, $publishSiteDir);
     }
 
     /**
@@ -166,7 +168,7 @@ final class JobWorkspace
     public function clear(string $buildId): bool
     {
         $buildJobDir = $this->buildJobDir($buildId);
-        $removed = Filesystem::removeDir($buildJobDir);
+        $removed = $this->filesystem->removeDir($buildJobDir);
 
         if (!$removed) {
             error_log(sprintf('[WARN] could not remove the job directory at %s', $buildJobDir));
