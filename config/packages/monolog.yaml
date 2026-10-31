@@ -1,0 +1,76 @@
+# Used when LOG_LEVEL is not set. Not in .env, which would hide a LOG_LEVEL that only getenv() sees.
+parameters:
+    env(LOG_LEVEL): info
+
+monolog:
+    channels: # To see all channels, run bin/console debug:autowiring logger
+        - deprecation # Deprecations are logged in the dedicated "deprecation" channel when it exists
+
+when@dev:
+    parameters:
+        env(LOG_LEVEL): debug
+
+    monolog:
+        handlers:
+            file:
+                type: stream
+                path: '%kernel.logs_dir%/ssg-worker.log'
+                level: '%env(LOG_LEVEL)%'
+                use_locking: true
+                include_stacktraces: true
+                channels: ['!event', '!deprecation']
+            stderr:
+                type: stream
+                path: php://stderr
+                level: '%env(LOG_LEVEL)%'
+                include_stacktraces: true
+                channels: ['!event', '!deprecation']
+            # One line per deprecation; their stack traces are vendor code.
+            deprecation_file:
+                type: stream
+                path: '%kernel.logs_dir%/ssg-worker.log'
+                level: '%env(LOG_LEVEL)%'
+                use_locking: true
+                channels: [deprecation]
+            deprecation_stderr:
+                type: stream
+                path: php://stderr
+                level: '%env(LOG_LEVEL)%'
+                channels: [deprecation]
+
+when@test:
+    monolog:
+        handlers:
+            # In memory; tests read the records from the monolog.handler.test service.
+            test:
+                type: test
+                level: debug
+                channels: ['!event']
+
+when@prod:
+    monolog:
+        handlers:
+            app:
+                type: filter
+                min_level: '%env(LOG_LEVEL)%'
+                handler: output
+                channels: ['!event', '!deprecation', '!messenger', '!http_client']
+            # Their info lines repeat ours.
+            framework:
+                type: filter
+                min_level: warning
+                handler: output
+                channels: [messenger, http_client]
+            output:
+                type: group
+                members: [file, stderr]
+            # The replicas share this file; use_locking keeps their lines whole.
+            file:
+                type: stream
+                path: '%kernel.logs_dir%/ssg-worker.log'
+                use_locking: true
+                include_stacktraces: true
+            stderr:
+                type: stream
+                path: php://stderr
+                include_stacktraces: true

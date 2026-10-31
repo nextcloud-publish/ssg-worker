@@ -107,6 +107,7 @@ treat a terminal status as final. The payload is specified in
 | `CALLBACK_TIMEOUT_SECONDS`      | no | `5`   | Idle timeout of the status callback PUT                                               |
 | `CALLBACK_MAX_DURATION_SECONDS` | no | `10`  | Maximum total duration of the status callback PUT; keep it well below `consumer_timeout` |
 | `CALLBACK_MAX_REDIRECTS`        | no | `0`   | Redirects followed for the status callback PUT                                        |
+| `LOG_LEVEL`                     | no | `info`, `debug` in dev | Lowest level logged: `debug`, `info`, `notice`, `warning`, `error`   |
 
 The two directory defaults are their paths inside the container; set them for a deployment
 outside Docker. `AMQP_DSN`, `PUBLISH_BASE_URL` and `MAX_DOWNLOAD_MB` have no fallback: an
@@ -117,6 +118,19 @@ builds succeed and publish where nothing serves them. A wrong `PUBLISH_BASE_URL`
 `PUBLISHED_DIR` must be readable by the uid that serves it. The worker runs as `ssg-worker` and
 creates `output/` at `0750`. `JobWorkspace::publish()` sets the published tree to `0755`
 for directories and `0644` for files. No unit test can verify this.
+
+## Logging
+
+[Monolog](https://symfony.com/doc/current/logging.html) writes every line to
+`var/log/ssg-worker.log` and to stderr, from `LOG_LEVEL` up. The file is not rotated; mount
+`var/log/` from the host and rotate it there. The replicas share the file.
+
+```text
+[2026-10-31T14:03:13.102+00:00] messenger.WARNING: Error thrown while handling message App\Message\BuildJob. Sending for retry #1 … {…} {"hostname":"3f9a1c2b7d4e"}
+```
+
+`hostname` is the container id. In prod the `messenger` and `http_client` channels write from
+`warning` up. Timestamps follow `TZ`.
 
 ## Local development
 
@@ -129,7 +143,7 @@ JOB_STORAGE_DIR=/tmp/ssg/build_temp \
 PUBLISHED_DIR=/tmp/ssg/published \
 PUBLISH_BASE_URL=http://localhost:8081 \
 MAX_DOWNLOAD_MB=256 \
-php bin/console messenger:consume builds -vv
+php bin/console messenger:consume builds
 ```
 
 This needs a RabbitMQ broker at that DSN (publish's dev stack exposes `5672` on
@@ -171,8 +185,8 @@ PHP reads its time zone from `TZ`, default UTC.
 kills the worker mid-build, the message is redelivered, and a build attempt is spent.
 
 `vendor/` is installed at image build time. Compose keeps it behind an anonymous volume
-so the `/ssg-worker` bind mount does not shadow it. Rebuild with `--build` after changing
-`composer.json`.
+so the `/ssg-worker` bind mount does not shadow it. After changing `composer.json`, rebuild
+with `--build --renew-anon-volumes`; without the second flag compose keeps the old `vendor/`.
 
 ## Images
 

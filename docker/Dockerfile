@@ -28,13 +28,13 @@ COPY --from=composer/composer:2-bin /composer /usr/bin/composer
 COPY composer.json composer.lock* ./
 RUN composer install --no-interaction --no-progress --no-scripts
 
-# var/ holds the Symfony cache, the only directory in the image the worker writes.
+# var/ holds the Symfony cache and var/log/, the only directory in the image the worker writes.
 RUN mkdir var && chown ssg-worker:ssg-worker var
 
 USER ssg-worker
 
 CMD ["php", "bin/console", "messenger:consume", "builds", \
-     "--time-limit=3600", "--memory-limit=512M", "-vv"]
+     "--time-limit=3600", "--memory-limit=512M"]
 
 # Stage "release", the default: base plus the source.
 FROM base AS release
