@@ -126,10 +126,18 @@ for directories and `0644` for files. No unit test can verify this.
 `var/log/` from the host and rotate it there. The replicas share the file.
 
 ```text
-[2026-10-31T14:03:13.102+00:00] messenger.WARNING: Error thrown while handling message App\Message\BuildJob. Sending for retry #1 … {…} {"hostname":"3f9a1c2b7d4e"}
+[2026-10-31T14:03:13.102+00:00] messenger.WARNING: Error thrown while handling message App\Message\BuildJob. Sending for retry #1 … {…} {"build_id":"0199c3e2-…","static_site_id":"site-42","slug":"handbook","attempt":1,"hostname":"3f9a1c2b7d4e"}
 ```
 
-`hostname` is the container id. In prod the `messenger` and `http_client` channels write from
+| `extra` key                 | Value                                                        |
+| --------------------------- | ------------------------------------------------------------ |
+| `build_id`                  | the build; publish logs the same id when it enqueues it      |
+| `static_site_id`, `slug`    | from the build's message                                     |
+| `attempt`                   | `1`, or `2` for the retry                                    |
+| `hostname`                  | the container id                                             |
+
+The build fields are on every line logged while the worker handles a build, Messenger's and
+HttpClient's included, so `grep <build_id>` finds the whole build. In prod the `messenger` and `http_client` channels write from
 `warning` up. Timestamps follow `TZ`.
 
 ## Local development
@@ -259,6 +267,8 @@ src/
     BuildJobHandler.php         registered in services.yaml, runs the build and reports it published
     BuildFailureHandler.php     reports a build that ran out of attempts, deletes it, and keeps
                                 volume paths out of what the client is sent
+  Logging/
+    BuildContextProcessor.php   adds the build being handled to every log line
 docs/build-pipeline.md          the pipeline in detail
 tests/                          PHPUnit tests for the above
 ```

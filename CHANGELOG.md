@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Logging with Monolog to `var/log/ssg-worker.log` and stderr, in line format, from `LOG_LEVEL` up
   (`info`, `debug` in dev). Every line carries the container's `hostname`. The `messenger` and
   `http_client` channels write from `warning` up in prod.
+- Every line logged during a build carries its `build_id`, `static_site_id`, `slug` and
+  `attempt`, Messenger's and HttpClient's lines included.
 
 ### Changed
 
