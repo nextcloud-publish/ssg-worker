@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Tests\Job;
 
 use App\Job\Filesystem;
+use Monolog\Handler\TestHandler;
+use Monolog\Logger;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -19,26 +21,20 @@ use PHPUnit\Framework\TestCase;
 final class FilesystemTest extends TestCase
 {
     private Filesystem $filesystem;
+    private TestHandler $logged;
     private string $root;
     private ?string $otherMount = null;
-    private string $logFile;
-    private string|false $previousErrorLog;
 
     protected function setUp(): void
     {
-        $this->filesystem = new Filesystem();
+        $this->logged = new TestHandler();
+        $this->filesystem = new Filesystem(new Logger('app', [$this->logged]));
         $this->root = sys_get_temp_dir() . '/worker-fs-test-' . bin2hex(random_bytes(6));
         mkdir($this->root, 0o755, true);
-
-        $this->logFile = sys_get_temp_dir() . '/worker-fs-log-' . bin2hex(random_bytes(6)) . '.log';
-        $this->previousErrorLog = ini_set('error_log', $this->logFile);
     }
 
     protected function tearDown(): void
     {
-        ini_set('error_log', $this->previousErrorLog === false ? '' : $this->previousErrorLog);
-        @unlink($this->logFile);
-
         foreach ([$this->root, $this->otherMount] as $dir) {
             if ($dir !== null && is_dir($dir)) {
                 exec('rm -rf ' . escapeshellarg($dir));
@@ -199,7 +195,7 @@ final class FilesystemTest extends TestCase
 
         self::assertFileExists($this->root . '/to/real.html');
         self::assertFileDoesNotExist($this->root . '/to/escape.html');
-        self::assertStringContainsString('skipping symlink', (string) file_get_contents($this->logFile));
+        self::assertTrue($this->logged->hasWarningThatContains('Skipped symlink while copying'));
     }
 
     // --- setFileAccess ----------------------------------------------------
@@ -242,7 +238,7 @@ final class FilesystemTest extends TestCase
         $this->filesystem->setFileAccess($this->root . '/tree', 0o755, 0o644);
 
         self::assertSame(0o600, fileperms($this->root . '/outside.txt') & 0o777);
-        self::assertStringContainsString('skipping symlink', (string) file_get_contents($this->logFile));
+        self::assertTrue($this->logged->hasWarningThatContains('Skipped symlink while setting permissions'));
     }
 
     public function testSetFileAccessRefusesAPathThatIsNotADirectory(): void

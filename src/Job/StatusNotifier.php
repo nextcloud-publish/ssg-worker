@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Job;
 
+use Psr\Log\LoggerInterface;
 use Symfony\Contracts\HttpClient\Exception\ExceptionInterface as HttpClientException;
 use Symfony\Contracts\HttpClient\HttpClientInterface;
 
@@ -13,6 +14,7 @@ use Symfony\Contracts\HttpClient\HttpClientInterface;
  * Throws \InvalidArgumentException when no retry could succeed and \RuntimeException when one might.
  *
  * @param HttpClientInterface $httpClient The http client to use to send the notification.
+ * @param LoggerInterface $logger The app logger.
  * @param int $timeoutSeconds The timeout in seconds for the http request.
  * @param int $maxDurationSeconds The maximum duration in seconds for the http request.
  * @param int $maxRedirects The maximum number of redirects for the http request.
@@ -27,6 +29,7 @@ final class StatusNotifier
 
     public function __construct(
         private readonly HttpClientInterface $httpClient,
+        private readonly LoggerInterface $logger,
         private readonly int $timeoutSeconds,
         private readonly int $maxDurationSeconds,
         private readonly int $maxRedirects,
@@ -37,15 +40,14 @@ final class StatusNotifier
      * Reports a published site and the URL it is served at.
      *
      * @param string $callbackStatusUrl The url to send the notification to.
-     * @param string $buildId The build id, used for the log line.
      * @param string $publishUrl The public URL of the published site.
      * @return void
      * @throws \InvalidArgumentException if no retry could succeed
      * @throws \RuntimeException         if the call is worth retrying
      */
-    public function notifyPublished(string $callbackStatusUrl, string $buildId, string $publishUrl): void
+    public function notifyPublished(string $callbackStatusUrl, string $publishUrl): void
     {
-        $this->put($callbackStatusUrl, $buildId, self::STATUS_PUBLISHED, ['publish_url' => $publishUrl]);
+        $this->put($callbackStatusUrl, self::STATUS_PUBLISHED, ['publish_url' => $publishUrl]);
     }
 
     /**
@@ -53,29 +55,27 @@ final class StatusNotifier
      * $errorMessage is sent as given, so it must already be redacted.
      *
      * @param string $callbackStatusUrl The url to send the notification to.
-     * @param string $buildId The build id, used for the log line.
      * @param string $errorMessage The reason the build failed.
      * @return void
      * @throws \InvalidArgumentException if no retry could succeed
      * @throws \RuntimeException         if the call is worth retrying
      */
-    public function notifyFailed(string $callbackStatusUrl, string $buildId, string $errorMessage): void
+    public function notifyFailed(string $callbackStatusUrl, string $errorMessage): void
     {
-        $this->put($callbackStatusUrl, $buildId, self::STATUS_FAILED, ['error_message' => $errorMessage]);
+        $this->put($callbackStatusUrl, self::STATUS_FAILED, ['error_message' => $errorMessage]);
     }
 
     /**
      * PUTs {"status": $status, "data": $data} to $callbackStatusUrl.
      *
      * @param string $callbackStatusUrl The url to send the notification to.
-     * @param string $buildId The build id, used for the log line.
      * @param string $status The status of the build.
      * @param array<string, string> $data The status-specific data object.
      * @return void
      * @throws \InvalidArgumentException if no retry could succeed
      * @throws \RuntimeException         if the call is worth retrying
      */
-    private function put(string $callbackStatusUrl, string $buildId, string $status, array $data): void
+    private function put(string $callbackStatusUrl, string $status, array $data): void
     {
         $payload = [
             'status' => $status,
@@ -102,7 +102,7 @@ final class StatusNotifier
         }
 
         if ($statusCode >= 200 && $statusCode < 300) {
-            error_log(sprintf('[INFO] reported %s for build %s to %s', $status, $buildId, $callbackStatusUrl));
+            $this->logger->info('Reported build status', ['status' => $status, 'url' => $callbackStatusUrl]);
             return;
         }
         if ($statusCode >= 300 && $statusCode < 400) {

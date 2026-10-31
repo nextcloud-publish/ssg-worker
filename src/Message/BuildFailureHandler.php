@@ -6,6 +6,7 @@ namespace App\Message;
 
 use App\Job\JobWorkspace;
 use App\Job\StatusNotifier;
+use Psr\Log\LoggerInterface;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 use Symfony\Component\Messenger\Event\WorkerMessageFailedEvent;
 
@@ -17,6 +18,7 @@ use Symfony\Component\Messenger\Event\WorkerMessageFailedEvent;
  *
  * @param JobWorkspace $jobWorkspace The job workspace helper class.
  * @param StatusNotifier $statusNotifier The notifier to use to notify the status callback.
+ * @param LoggerInterface $logger The app logger.
  * @param string $buildTempDir The build temp directory.
  * @param string $publishedDir The published directory.
  */
@@ -34,6 +36,7 @@ final class BuildFailureHandler implements EventSubscriberInterface
     public function __construct(
         private readonly JobWorkspace $jobWorkspace,
         private readonly StatusNotifier $statusNotifier,
+        private readonly LoggerInterface $logger,
         string $buildTempDir,
         string $publishedDir,
     ) {
@@ -72,30 +75,20 @@ final class BuildFailureHandler implements EventSubscriberInterface
             return;
         }
 
-        $errorMessage = $event->getThrowable()->getMessage();
+        $error = $event->getThrowable();
 
         // Raw, with paths: this is the operator's record.
-        error_log(sprintf(
-            '[ERROR] build %s of %s failed: %s',
-            $buildJob->build_id,
-            $buildJob->static_site_id,
-            $errorMessage,
-        ));
+        $this->logger->error('Build failed', ['exception' => $error]);
 
         $this->jobWorkspace->clear($buildJob->build_id);
 
         try {
             $this->statusNotifier->notifyFailed(
                 callbackStatusUrl: $buildJob->callback_status_url,
-                buildId: $buildJob->build_id,
-                errorMessage: $this->redact($errorMessage),
+                errorMessage: $this->redact($error->getMessage()),
             );
         } catch (\Throwable $e) {
-            error_log(sprintf(
-                '[ERROR] could not report failed for build %s: %s',
-                $buildJob->build_id,
-                $e->getMessage(),
-            ));
+            $this->logger->error('Could not report failed build', ['exception' => $e]);
         }
     }
 

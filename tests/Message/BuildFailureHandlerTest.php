@@ -10,6 +10,9 @@ use App\Job\JobWorkspace;
 use App\Job\StatusNotifier;
 use App\Message\BuildFailureHandler;
 use App\Message\BuildJob;
+use Monolog\Handler\TestHandler;
+use Monolog\LogRecord;
+use Monolog\Logger;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpClient\MockHttpClient;
 use Symfony\Component\HttpClient\Response\MockResponse;
@@ -39,8 +42,7 @@ final class BuildFailureHandlerTest extends TestCase
 
     /** @var list<array<mixed>> */
     private array $callbacks = [];
-    private string $logFile;
-    private string|false $previousErrorLog;
+    private TestHandler $logged;
 
     protected function setUp(): void
     {
@@ -52,15 +54,11 @@ final class BuildFailureHandlerTest extends TestCase
             return new MockResponse('', ['http_code' => 204]);
         });
 
-        $this->logFile = sys_get_temp_dir() . '/worker-failure-log-' . bin2hex(random_bytes(6)) . '.log';
-        $this->previousErrorLog = ini_set('error_log', $this->logFile);
+        $this->logged = new TestHandler();
     }
 
     protected function tearDown(): void
     {
-        ini_set('error_log', $this->previousErrorLog === false ? '' : $this->previousErrorLog);
-        @unlink($this->logFile);
-
         if (is_dir($this->root)) {
             exec('rm -rf ' . escapeshellarg($this->root));
         }
@@ -77,13 +75,23 @@ final class BuildFailureHandlerTest extends TestCase
     }
 
     /**
+     * Returns a logger that records into $this->logged.
+     *
+     * @return Logger the logger every collaborator shares
+     */
+    private function logger(): Logger
+    {
+        return new Logger('app', [$this->logged]);
+    }
+
+    /**
      * A workspace on this test's two roots.
      *
      * @return JobWorkspace the workspace the handler clears through
      */
     private function jobWorkspace(): JobWorkspace
     {
-        return new JobWorkspace(new Filesystem(), $this->buildTemp(), $this->root . '/published', 'http://sites.test');
+        return new JobWorkspace(new Filesystem($this->logger()), $this->logger(), $this->buildTemp(), $this->root . '/published', 'http://sites.test');
     }
 
     /**
@@ -96,7 +104,8 @@ final class BuildFailureHandlerTest extends TestCase
     {
         return new BuildFailureHandler(
             $this->jobWorkspace(),
-            new StatusNotifier($callbackClient ?? $this->callbackClient, timeoutSeconds: 5, maxDurationSeconds: 10, maxRedirects: 0),
+            new StatusNotifier($callbackClient ?? $this->callbackClient, $this->logger(), timeoutSeconds: 5, maxDurationSeconds: 10, maxRedirects: 0),
+            $this->logger(),
             $this->buildTemp(),
             $this->root . '/published',
         );
@@ -265,7 +274,11 @@ final class BuildFailureHandlerTest extends TestCase
         self::assertStringContainsString('tar: unexpected EOF in archive', $error);
 
         /** The operator's copy keeps the real path. */
-        self::assertStringContainsString($this->buildTemp(), (string) file_get_contents($this->logFile));
+        self::assertTrue($this->logged->hasErrorThatPasses(
+            fn (LogRecord $record): bool => $record->message === 'Build failed'
+                && $record->context['exception'] instanceof \Throwable
+                && str_contains($record->context['exception']->getMessage(), $this->buildTemp()),
+        ));
     }
 
     public function testTheReportedReasonNamesThePublishedRootToo(): void
@@ -352,7 +365,8 @@ final class BuildFailureHandlerTest extends TestCase
     {
         $handler = new BuildFailureHandler(
             $this->jobWorkspace(),
-            new StatusNotifier($this->callbackClient, timeoutSeconds: 5, maxDurationSeconds: 10, maxRedirects: 0),
+            new StatusNotifier($this->callbackClient, $this->logger(), timeoutSeconds: 5, maxDurationSeconds: 10, maxRedirects: 0),
+            $this->logger(),
             '/opt/ssg',
             '/opt/ssg/published',
         );
@@ -386,10 +400,7 @@ final class BuildFailureHandlerTest extends TestCase
 
         $reporter->onMessageFailed($this->failedEvent(new \RuntimeException('Download failed')));
 
-        self::assertStringContainsString(
-            '[ERROR] could not report failed',
-            (string) file_get_contents($this->logFile),
-        );
+        self::assertTrue($this->logged->hasErrorThatContains('Could not report failed build'));
     }
 
     /** The client cannot be told, but the cleanup still has to run. */

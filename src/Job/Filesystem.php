@@ -4,11 +4,20 @@ declare(strict_types=1);
 
 namespace App\Job;
 
+use Psr\Log\LoggerInterface;
+
 /**
  * Filesystem operations helper class with specific error handling.
+ *
+ * @param LoggerInterface $logger The app logger, for what is skipped or left behind.
  */
 final class Filesystem
 {
+    public function __construct(
+        private readonly LoggerInterface $logger,
+    ) {
+    }
+
     /**
      * Creates $dir (and any missing parents), tolerating one already there.
      * $mode has no default on purpose to avoid accidentally setting the wrong mode.
@@ -72,7 +81,7 @@ final class Filesystem
         $this->copyDir($from, $to);
 
         if (!$this->removeDir($from)) {
-            error_log(sprintf('[WARN] copied %s to %s but could not remove the source', $from, $to));
+            $this->logger->warning('Could not remove source after copy', ['from' => $from, 'to' => $to]);
         }
     }
 
@@ -110,7 +119,7 @@ final class Filesystem
 
             // isLink() MUST be tested first: isDir() and isFile() follow symlinks we want to skip.
             if ($entry->isLink()) {
-                error_log(sprintf('[WARN] skipping symlink %s while copying %s', $entry->getPathname(), $from));
+                $this->logger->warning('Skipped symlink while copying', ['path' => $entry->getPathname(), 'from' => $from]);
             } elseif ($entry->isDir()) {
                 // getPerms() carries the file-type bits too, so mask them off.
                 $this->ensureDir($target, $entry->getPerms() & 0o777);
@@ -167,7 +176,7 @@ final class Filesystem
 
             // Skip symlinks avoiding jumping inside or outside the tree.
             if ($entry->isLink()) {
-                error_log(sprintf('[WARN] skipping symlink %s while setting permissions', $entry->getPathname()));
+                $this->logger->warning('Skipped symlink while setting permissions', ['path' => $entry->getPathname()]);
             } else {
                 $this->applyFileAccessTo($entry->getPathname(), $entry->isDir() ? $dirMode : $fileMode, $owner, $group);
             }

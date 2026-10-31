@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Job;
 
+use Psr\Log\LoggerInterface;
+
 /**
  * Holds the folder layout of a build job and of the published site, and resets, publishes and clears them.
  * The ids are used as directory names unchecked: publish validates them before a job is enqueued.
@@ -23,6 +25,7 @@ namespace App\Job;
  *       {slug}/                        the live site, served at publishUrl()
  *
  * @param Filesystem $filesystem The filesystem operations to run the layout with.
+ * @param LoggerInterface $logger The app logger.
  * @param string $buildTempDir The directory to store the build temporary files.
  * @param string $publishedDir The directory to store the published files.
  * @param string $publishBaseUrl The public URL the published directory is served at.
@@ -40,6 +43,7 @@ final class JobWorkspace
 
     public function __construct(
         private readonly Filesystem $filesystem,
+        private readonly LoggerInterface $logger,
         private readonly string $buildTempDir,
         private readonly string $publishedDir,
         private readonly string $publishBaseUrl,
@@ -156,6 +160,7 @@ final class JobWorkspace
 
         $this->filesystem->removeDir($publishSiteDir);
         $this->filesystem->rename($publishStagingDir, $publishSiteDir);
+        $this->logger->debug('Moved site into place', ['from' => $publishStagingDir, 'to' => $publishSiteDir]);
     }
 
     /**
@@ -168,10 +173,13 @@ final class JobWorkspace
     public function clear(string $buildId): bool
     {
         $buildJobDir = $this->buildJobDir($buildId);
+        $existed = is_dir($buildJobDir);
         $removed = $this->filesystem->removeDir($buildJobDir);
 
         if (!$removed) {
-            error_log(sprintf('[WARN] could not remove the job directory at %s', $buildJobDir));
+            $this->logger->warning('Could not remove job directory', ['dir' => $buildJobDir]);
+        } elseif ($existed) {
+            $this->logger->debug('Cleared job directory', ['dir' => $buildJobDir]);
         }
 
         return $removed;

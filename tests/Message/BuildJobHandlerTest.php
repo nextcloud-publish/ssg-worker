@@ -13,6 +13,10 @@ use App\Job\SiteRenderer;
 use App\Job\StatusNotifier;
 use App\Message\BuildJob;
 use App\Message\BuildJobHandler;
+use Monolog\Handler\TestHandler;
+use Monolog\Level;
+use Monolog\LogRecord;
+use Monolog\Logger;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpClient\MockHttpClient;
 use Symfony\Component\HttpClient\Response\MockResponse;
@@ -51,8 +55,7 @@ final class BuildJobHandlerTest extends TestCase
 
     /** @var list<array{url: string, body: array<mixed>}> */
     private array $callbacks = [];
-    private string $logFile;
-    private string|false $previousErrorLog;
+    private TestHandler $logged;
 
     protected function setUp(): void
     {
@@ -72,16 +75,11 @@ final class BuildJobHandlerTest extends TestCase
             return new MockResponse('', ['http_code' => 204]);
         });
 
-        // error_log() writes to stderr or syslog by default, neither of which a test can assert against.
-        $this->logFile = sys_get_temp_dir() . '/worker-job-log-' . bin2hex(random_bytes(6)) . '.log';
-        $this->previousErrorLog = ini_set('error_log', $this->logFile);
+        $this->logged = new TestHandler();
     }
 
     protected function tearDown(): void
     {
-        ini_set('error_log', $this->previousErrorLog === false ? '' : $this->previousErrorLog);
-        @unlink($this->logFile);
-
         if (is_dir($this->root)) {
             exec('rm -rf ' . escapeshellarg($this->root));
         }
@@ -116,7 +114,7 @@ final class BuildJobHandlerTest extends TestCase
      */
     private function jobWorkspace(): JobWorkspace
     {
-        return new JobWorkspace(new Filesystem(), $this->buildTemp(), $this->publishedRoot(), 'http://sites.test');
+        return new JobWorkspace(new Filesystem($this->logger()), $this->logger(), $this->buildTemp(), $this->publishedRoot(), 'http://sites.test');
     }
 
     /**
@@ -151,11 +149,22 @@ final class BuildJobHandlerTest extends TestCase
 
         return new BuildJobHandler(
             new ContentDownloader($contentClient ?? $this->client, maxMegabytes: 1, maxDurationSeconds: 300, timeoutSeconds: 30, maxRedirects: 3),
-            new ArchiveExtractor(new Filesystem()),
+            new ArchiveExtractor(new Filesystem($this->logger())),
             new SiteRenderer(),
             $workspace,
-            new StatusNotifier($this->callbackClient, timeoutSeconds: 5, maxDurationSeconds: 10, maxRedirects: 0),
+            new StatusNotifier($this->callbackClient, $this->logger(), timeoutSeconds: 5, maxDurationSeconds: 10, maxRedirects: 0),
+            $this->logger(),
         );
+    }
+
+    /**
+     * Returns a logger that records into $this->logged.
+     *
+     * @return Logger the logger every collaborator shares
+     */
+    private function logger(): Logger
+    {
+        return new Logger('app', [$this->logged]);
     }
 
     /**
@@ -296,7 +305,44 @@ final class BuildJobHandlerTest extends TestCase
     {
         ($this->buildJobHandler())($this->job());
 
-        self::assertStringContainsString($this->buildJobDir(), (string) file_get_contents($this->logFile));
+        self::assertTrue($this->logged->hasDebug([
+            'message' => 'Prepared job directory',
+            'context' => ['dir' => $this->buildJobDir()],
+        ]));
+    }
+
+    public function testLogsEveryStepAtDebug(): void
+    {
+        ($this->buildJobHandler())($this->job());
+
+        $steps = [
+            'Prepared job directory',
+            'Downloaded content archive',
+            'Extracted content archive',
+            'Rendered site',
+            'Moved site into place',
+            'Cleared job directory',
+        ];
+        foreach ($steps as $step) {
+            self::assertTrue($this->logged->hasDebugThatContains($step), $step);
+        }
+    }
+
+    public function testLogsWhenABuildStartsAndWhenItsSiteIsPublished(): void
+    {
+        ($this->buildJobHandler())($this->job());
+
+        self::assertTrue($this->logged->hasInfo(['message' => 'Build started', 'context' => ['url' => self::CONTENT_URL]]));
+
+        $published = array_values(array_filter(
+            $this->logged->getRecords(),
+            static fn (LogRecord $record): bool => $record->message === 'Published site',
+        ));
+        self::assertCount(1, $published);
+        self::assertSame(Level::Info, $published[0]->level);
+        self::assertSame(2, $published[0]->context['pages'], 'The sample archive holds two pages.');
+        self::assertIsInt($published[0]->context['duration_ms']);
+        self::assertSame('http://sites.test/' . self::SITE_ID . '/' . self::SLUG . '/', $published[0]->context['url']);
     }
 
     /**

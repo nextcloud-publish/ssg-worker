@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The image runs `messenger:consume` without `-vv`; `LOG_LEVEL` sets what is logged.
+- The worker logs through Monolog instead of `error_log()`: a fixed message per event with its
+  data as context, steps at `debug`. New lines: `Build started`, `Published site` with
+  `duration_ms`, `Moved site into place` and `Cleared job directory`. `Build failed` carries the
+  exception with its stack trace.
 
 ## [0.2.0] - 2026-10-30
 

@@ -7,6 +7,7 @@ namespace App\Tests\Job;
 use App\Job\Filesystem;
 use App\Job\JobWorkspace;
 use PHPUnit\Framework\TestCase;
+use Psr\Log\NullLogger;
 
 /**
  * Covers JobWorkspace::publish().
@@ -28,29 +29,22 @@ final class JobWorkspacePublishTest extends TestCase
     private string $root;
     private ?string $publishedOnOtherMount = null;
     private JobWorkspace $workspace;
-    private string $logFile;
-    private string|false $previousErrorLog;
 
     protected function setUp(): void
     {
         $this->root = sys_get_temp_dir() . '/worker-publish-test-' . bin2hex(random_bytes(6));
 
         $this->workspace = new JobWorkspace(
-            new Filesystem(),
+            new Filesystem(new NullLogger()),
+            new NullLogger(),
             $this->root . '/build_temp',
             $this->root . '/published',
             'http://sites.test',
         );
-
-        $this->logFile = sys_get_temp_dir() . '/worker-publish-log-' . bin2hex(random_bytes(6)) . '.log';
-        $this->previousErrorLog = ini_set('error_log', $this->logFile);
     }
 
     protected function tearDown(): void
     {
-        ini_set('error_log', $this->previousErrorLog === false ? '' : $this->previousErrorLog);
-        @unlink($this->logFile);
-
         foreach ([$this->root, $this->publishedOnOtherMount] as $dir) {
             if ($dir !== null && is_dir($dir)) {
                 exec('rm -rf ' . escapeshellarg($dir));
@@ -334,7 +328,8 @@ final class JobWorkspacePublishTest extends TestCase
         }
 
         $this->workspace = new JobWorkspace(
-            new Filesystem(),
+            new Filesystem(new NullLogger()),
+            new NullLogger(),
             $this->root . '/build_temp',
             $this->publishedOnOtherMount,
             'http://sites.test',

@@ -9,8 +9,7 @@ There is no HTTP server, no database and no templating in this repo.
 
 For each job the worker downloads the content archive, extracts it, renders the pages,
 publishes the result to `PUBLISHED_DIR/<static_site_id>/<slug>/` and PUTs the outcome to the job's
-`callback_status_url`. Progress and failures go to PHP's `error_log()` and are captured
-by `docker logs`.
+`callback_status_url`. Progress and failures are logged, see [Logging](#logging).
 
 [docs/build-pipeline.md](docs/build-pipeline.md) describes the directories, publishing,
 retries, the callback body, and what the tests do not cover.
@@ -139,6 +138,27 @@ for directories and `0644` for files. No unit test can verify this.
 The build fields are on every line logged while the worker handles a build, Messenger's and
 HttpClient's included, so `grep <build_id>` finds the whole build. In prod the `messenger` and `http_client` channels write from
 `warning` up. Timestamps follow `TZ`.
+
+| Level     | Message                                     | Context                          |
+| --------- | ------------------------------------------- | -------------------------------- |
+| `info`    | `Build started`                             | `url`, the content download      |
+| `debug`   | `Prepared job directory`                    | `dir`                            |
+| `debug`   | `Downloaded content archive`                | `file`, `bytes`                  |
+| `debug`   | `Extracted content archive`                 | `dir`                            |
+| `debug`   | `Rendered site`                             | `pages`, `dir`                   |
+| `debug`   | `Moved site into place`                     | `from`, `to`                     |
+| `debug`   | `Cleared job directory`                     | `dir`                            |
+| `info`    | `Published site`                            | `pages`, `duration_ms`, `url`    |
+| `info`    | `Reported build status`                     | `status`, `url`, the callback    |
+| `warning` | `Skipped symlink while copying`             | `path`, `from`                   |
+| `warning` | `Skipped symlink while setting permissions` | `path`                           |
+| `warning` | `Could not remove source after copy`        | `from`, `to`                     |
+| `warning` | `Could not remove job directory`            | `dir`                            |
+| `error`   | `Build failed`                              | `exception`, with paths          |
+| `error`   | `Could not report failed build`             | `exception`                      |
+
+A build without `Published site` or `Build failed` after `Build started` was cut off, for
+example by a killed worker.
 
 ## Local development
 

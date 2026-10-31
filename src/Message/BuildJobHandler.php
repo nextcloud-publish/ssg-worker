@@ -9,6 +9,7 @@ use App\Job\ContentDownloader;
 use App\Job\JobWorkspace;
 use App\Job\SiteRenderer;
 use App\Job\StatusNotifier;
+use Psr\Log\LoggerInterface;
 use Symfony\Component\Messenger\Exception\UnrecoverableMessageHandlingException;
 
 /**
@@ -31,6 +32,7 @@ use Symfony\Component\Messenger\Exception\UnrecoverableMessageHandlingException;
  * @param SiteRenderer $siteRenderer The site renderer to use to render the content.
  * @param JobWorkspace $jobWorkspace The job workspace to use to manage the job workspace.
  * @param StatusNotifier $statusNotifier The status notifier to use to notify the status of the build.
+ * @param LoggerInterface $logger The app logger.
  *
  * Registered as a message handler in services.yaml rather than via
  * #[AsMessageHandler], which pins it to the "builds" transport.
@@ -43,11 +45,15 @@ final class BuildJobHandler
         private readonly SiteRenderer $siteRenderer,
         private readonly JobWorkspace $jobWorkspace,
         private readonly StatusNotifier $statusNotifier,
+        private readonly LoggerInterface $logger,
     ) {
     }
 
     public function __invoke(BuildJob $buildJob): void
     {
+        $startedAt = hrtime(true);
+        $this->logger->info('Build started', ['url' => $buildJob->content_download_url]);
+
         // build, publish and notify success are all inside the same try block to ensure that
         // a failed build in any step is retried or handled as a failure by Messenger.
         try {
@@ -55,18 +61,17 @@ final class BuildJobHandler
             $this->jobWorkspace->publish($buildJob->build_id, $buildJob->static_site_id, $buildJob->slug);
             $this->jobWorkspace->clear($buildJob->build_id);
 
-            error_log(sprintf(
-                '[INFO] published %s/%s from build %s (%d page(s))',
-                $buildJob->static_site_id,
-                $buildJob->slug,
-                $buildJob->build_id,
-                $pageCount,
-            ));
+            $publishUrl = $this->jobWorkspace->publishUrl($buildJob->static_site_id, $buildJob->slug);
 
+            // Before the callback, so the log records the publish even if the callback fails.
+            $this->logger->info('Published site', [
+                'pages' => $pageCount,
+                'duration_ms' => intdiv(hrtime(true) - $startedAt, 1_000_000),
+                'url' => $publishUrl,
+            ]);
             $this->statusNotifier->notifyPublished(
                 callbackStatusUrl: $buildJob->callback_status_url,
-                buildId: $buildJob->build_id,
-                publishUrl: $this->jobWorkspace->publishUrl($buildJob->static_site_id, $buildJob->slug),
+                publishUrl: $publishUrl,
             );
         } catch (\InvalidArgumentException $e) {
             // Marked unrecoverable so the retry strategy is skipped entirely.
@@ -79,28 +84,19 @@ final class BuildJobHandler
     {
         /** Clear any previous attempt to avoid any mess when mixing up builds. */
         $buildJobDir = $this->jobWorkspace->reset($buildJob->build_id);
-
-        error_log(sprintf('[INFO] prepared job workdir %s', $buildJobDir));
+        $this->logger->debug('Prepared job directory', ['dir' => $buildJobDir]);
 
         $buildJobInputDir = $this->jobWorkspace->buildJobInputDir($buildJob->build_id);
         $archiveFile = $this->contentDownloader->download($buildJob->content_download_url, $buildJobInputDir);
-
-        error_log(sprintf(
-            '[INFO] downloaded %s to %s (%d bytes)',
-            $buildJob->content_download_url,
-            $archiveFile,
-            (int) @filesize($archiveFile),
-        ));
+        $this->logger->debug('Downloaded content archive', ['file' => $archiveFile, 'bytes' => (int) @filesize($archiveFile)]);
 
         $buildJobUnarchivedDir = $this->jobWorkspace->buildJobUnarchivedDir($buildJob->build_id);
         $this->archiveExtractor->extract($archiveFile, $buildJobUnarchivedDir);
-
-        error_log(sprintf('[INFO] extracted %s into %s', $archiveFile, $buildJobUnarchivedDir));
+        $this->logger->debug('Extracted content archive', ['dir' => $buildJobUnarchivedDir]);
 
         $buildJobOutputDir = $this->jobWorkspace->buildJobOutputDir($buildJob->build_id);
         $pageCount = $this->siteRenderer->render($buildJobUnarchivedDir, $buildJobOutputDir, $buildJob->title);
-
-        error_log(sprintf('[INFO] rendered %d page(s) into %s', $pageCount, $buildJobOutputDir));
+        $this->logger->debug('Rendered site', ['pages' => $pageCount, 'dir' => $buildJobOutputDir]);
 
         return $pageCount;
     }
