@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `http_client` channels write from `warning` up in prod.
 - Every line logged during a build carries its `build_id`, `static_site_id`, `slug` and
   `attempt`, Messenger's and HttpClient's lines included.
+- Sentry through Monolog, in prod with `SENTRY_DSN`: `error` lines with an exception become
+  events with the build's fields, the build's earlier lines their breadcrumbs. A failed build is
+  reported once, by `Build failed`.
 
 ### Changed
 

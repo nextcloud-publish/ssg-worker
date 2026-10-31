@@ -74,3 +74,21 @@ when@prod:
                 type: stream
                 path: php://stderr
                 include_stacktraces: true
+            # Error lines with an exception become Sentry events. "Build failed" reports what Messenger logs again.
+            sentry:
+                type: filter
+                min_level: error
+                handler: sentry_events
+                channels: ['!event', '!deprecation', '!messenger', '!http_client']
+            # The lines before an event become its breadcrumbs, whatever LOG_LEVEL is.
+            sentry_breadcrumbs:
+                type: filter
+                max_level: warning
+                handler: breadcrumbs
+                channels: ['!event', '!deprecation', '!messenger', '!http_client']
+            sentry_events:
+                type: service
+                id: Sentry\Monolog\ExceptionToSentryIssueHandler
+            breadcrumbs:
+                type: service
+                id: Sentry\Monolog\BreadcrumbHandler

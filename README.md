@@ -107,6 +107,7 @@ treat a terminal status as final. The payload is specified in
 | `CALLBACK_MAX_DURATION_SECONDS` | no | `10`  | Maximum total duration of the status callback PUT; keep it well below `consumer_timeout` |
 | `CALLBACK_MAX_REDIRECTS`        | no | `0`   | Redirects followed for the status callback PUT                                        |
 | `LOG_LEVEL`                     | no | `info`, `debug` in dev | Lowest level logged: `debug`, `info`, `notice`, `warning`, `error`   |
+| `SENTRY_DSN`                    | no | none  | Sentry or GlitchTip DSN; prod only, unset sends nothing                               |
 
 The two directory defaults are their paths inside the container; set them for a deployment
 outside Docker. `AMQP_DSN`, `PUBLISH_BASE_URL` and `MAX_DOWNLOAD_MB` have no fallback: an
@@ -159,6 +160,12 @@ HttpClient's included, so `grep <build_id>` finds the whole build. In prod the `
 
 A build without `Published site` or `Build failed` after `Build started` was cut off, for
 example by a killed worker.
+
+In prod, with `SENTRY_DSN` set, every `error` line with an `exception` is also sent to Sentry:
+`Build failed`, `Could not report failed build`, and a worker that dies. The event carries the
+build's `extra` fields and, as breadcrumbs, only that build's earlier lines, `debug` included.
+Messenger's own failure lines are not sent; `Build failed` reports the same exception once, after
+the last attempt.
 
 ## Local development
 
@@ -289,6 +296,7 @@ src/
                                 volume paths out of what the client is sent
   Logging/
     BuildContextProcessor.php   adds the build being handled to every log line
+    SentryMessageContext.php    gives every message its own Sentry breadcrumbs
 docs/build-pipeline.md          the pipeline in detail
 tests/                          PHPUnit tests for the above
 ```

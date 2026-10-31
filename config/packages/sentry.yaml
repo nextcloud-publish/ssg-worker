@@ -1,0 +1,23 @@
+when@prod:
+    parameters:
+        # No DSN, no events.
+        env(SENTRY_DSN): ''
+
+    sentry:
+        dsn: '%env(SENTRY_DSN)%'
+        # monolog.yaml sends the exceptions; these would send them a second time.
+        register_error_listener: false
+        register_error_handler: false
+        messenger:
+            enabled: false
+        tracing:
+            enabled: false
+
+    services:
+        Sentry\Monolog\ExceptionToSentryIssueHandler:
+            arguments:
+                $hub: '@Sentry\State\HubInterface'
+
+        Sentry\Monolog\BreadcrumbHandler:
+            arguments:
+                $hub: '@Sentry\State\HubInterface'
