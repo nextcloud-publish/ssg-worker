@@ -20,7 +20,7 @@ env:
   JOB_STORAGE_DIR: /tmp/ssg-ci/build_temp
   PUBLISHED_DIR: /tmp/ssg-ci/published
   PUBLISH_BASE_URL: http://sites.test
-  PHP_EXTENSIONS: ctype, iconv, amqp, mbstring, json, phar, zlib
+  PHP_EXTENSIONS: ctype, iconv, amqp, pcntl, mbstring, json, phar, zlib
 
 jobs:
   lint:
