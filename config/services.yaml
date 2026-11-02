@@ -4,9 +4,9 @@
 # Files in the packages/ subdirectory configure your dependencies.
 # See also https://symfony.com/doc/current/service_container/import.html
 parameters:
-    # Defaults for the storage roots: their fixed locations inside the container. Set them for a deployment outside Docker.
-    env(JOB_STORAGE_DIR): '/opt/ssg/build_temp'
-    env(PUBLISHED_DIR): '/opt/ssg/published'
+    # Defaults for the storage roots, in var/ like the cache and the logs.
+    env(JOB_STORAGE_DIR): '%kernel.project_dir%/var/build_temp'
+    env(PUBLISHED_DIR): '%kernel.project_dir%/var/published'
     # Defaults for the status callback options, used when the env var is not set.
     env(CALLBACK_TIMEOUT_SECONDS): '5'
     env(CALLBACK_MAX_DURATION_SECONDS): '10'

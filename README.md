@@ -92,28 +92,28 @@ treat a terminal status as final. The payload is specified in
 
 ## Environment variables
 
-| Variable          | Required | Default | Description                                                                                       |
-| ----------------- | -------- | ------- | --------------------------------------------------------------------------------------------------- |
-| `AMQP_DSN`        | yes      | none    | RabbitMQ connection string, e.g. `amqp://app:secret@rabbitmq:5672/%2f`                            |
-| `AMQP_HEARTBEAT`  | no       | `10`    | AMQP heartbeat in seconds; must match the broker's setting                                        |
-| `JOB_STORAGE_DIR` | no       | `/opt/ssg/build_temp` | Build scratch root. The worker creates `<build_id>/input` and `/output` under it    |
-| `PUBLISHED_DIR`   | no       | `/opt/ssg/published`  | Where finished sites are published, as `<static_site_id>/<slug>/`. An external nginx serves this |
-| `PUBLISH_BASE_URL`| yes      | none    | The public URL `PUBLISHED_DIR` is served at. `publish_url` is `<base>/<static_site_id>/<slug>/`   |
-| `MAX_DOWNLOAD_MB` | yes      | none    | Ceiling on a single content download, in megabytes. Minimum `1`                                   |
-| `DOWNLOAD_TIMEOUT_SECONDS`      | no | `30`  | Idle timeout of the content download                                                  |
-| `DOWNLOAD_MAX_DURATION_SECONDS` | no | `300` | Maximum total duration of the content download                                        |
-| `DOWNLOAD_MAX_REDIRECTS`        | no | `3`   | Redirects followed for the content download                                           |
-| `CALLBACK_TIMEOUT_SECONDS`      | no | `5`   | Idle timeout of the status callback PUT                                               |
-| `CALLBACK_MAX_DURATION_SECONDS` | no | `10`  | Maximum total duration of the status callback PUT; keep it well below `consumer_timeout` |
-| `CALLBACK_MAX_REDIRECTS`        | no | `0`   | Redirects followed for the status callback PUT                                        |
-| `LOG_LEVEL`                     | no | `info`, `debug` in dev | Lowest level logged: `debug`, `info`, `notice`, `warning`, `error`   |
-| `SENTRY_DSN`                    | no | none  | Sentry or GlitchTip DSN; prod only, unset sends nothing                               |
+| Variable                        | Required | Default                | Description                                                                                      |
+| ------------------------------- | -------- | ---------------------- | ------------------------------------------------------------------------------------------------ |
+| `AMQP_DSN`                      | yes      | none                   | RabbitMQ connection string, e.g. `amqp://app:secret@rabbitmq:5672/%2f`                           |
+| `AMQP_HEARTBEAT`                | no       | `10`                   | AMQP heartbeat in seconds; must match the broker's setting                                       |
+| `JOB_STORAGE_DIR`               | no       | `var/build_temp`       | Build scratch root. The worker creates `<build_id>/input` and `/output` under it                 |
+| `PUBLISHED_DIR`                 | no       | `var/published`        | Where finished sites are published, as `<static_site_id>/<slug>/`. An external nginx serves this |
+| `PUBLISH_BASE_URL`              | yes      | none                   | The public URL `PUBLISHED_DIR` is served at. `publish_url` is `<base>/<static_site_id>/<slug>/`  |
+| `MAX_DOWNLOAD_MB`               | yes      | none                   | Ceiling on a single content download, in megabytes. Minimum `1`                                  |
+| `DOWNLOAD_TIMEOUT_SECONDS`      | no       | `30`                   | Idle timeout of the content download                                                             |
+| `DOWNLOAD_MAX_DURATION_SECONDS` | no       | `300`                  | Maximum total duration of the content download                                                   |
+| `DOWNLOAD_MAX_REDIRECTS`        | no       | `3`                    | Redirects followed for the content download                                                      |
+| `CALLBACK_TIMEOUT_SECONDS`      | no       | `5`                    | Idle timeout of the status callback PUT                                                          |
+| `CALLBACK_MAX_DURATION_SECONDS` | no       | `10`                   | Maximum total duration of the status callback PUT; keep it well below `consumer_timeout`         |
+| `CALLBACK_MAX_REDIRECTS`        | no       | `0`                    | Redirects followed for the status callback PUT                                                   |
+| `LOG_LEVEL`                     | no       | `info`, `debug` in dev | Lowest level logged: `debug`, `info`, `notice`, `warning`, `error`                               |
+| `SENTRY_DSN`                    | no       | none                   | Sentry or GlitchTip DSN; prod only, unset sends nothing                                          |
 
-The two directory defaults are their paths inside the container; set them for a deployment
-outside Docker. `AMQP_DSN`, `PUBLISH_BASE_URL` and `MAX_DOWNLOAD_MB` have no fallback: an
-unset one stops the deployment rather than being guessed. A wrong `PUBLISHED_DIR` lets
-builds succeed and publish where nothing serves them. A wrong `PUBLISH_BASE_URL` reports a
-`publish_url` that does not resolve.
+The two directory defaults are relative to the project directory, so in the image they are
+`/ssg-worker/var/build_temp` and `/ssg-worker/var/published`. `AMQP_DSN`, `PUBLISH_BASE_URL`
+and `MAX_DOWNLOAD_MB` have no fallback: an unset one stops the deployment rather than being
+guessed. A wrong `PUBLISHED_DIR` lets builds succeed and publish where nothing serves them. A
+wrong `PUBLISH_BASE_URL` reports a `publish_url` that does not resolve.
 
 `PUBLISHED_DIR` must be readable by the uid that serves it. The worker runs as `ssg-worker` and
 creates `output/` at `0750`. `JobWorkspace::publish()` sets the published tree to `0755`
@@ -171,11 +171,8 @@ the last attempt.
 
 ```bash
 composer install
-mkdir -p /tmp/ssg/{build_temp,published}
 APP_ENV=dev \
 AMQP_DSN="amqp://app:secret@localhost:5672/%2f" \
-JOB_STORAGE_DIR=/tmp/ssg/build_temp \
-PUBLISHED_DIR=/tmp/ssg/published \
 PUBLISH_BASE_URL=http://localhost:8081 \
 MAX_DOWNLOAD_MB=256 \
 php bin/console messenger:consume builds
