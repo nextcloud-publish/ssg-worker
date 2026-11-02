@@ -2,6 +2,7 @@
 .gitignore
 .dockerignore
 docker
+!docker/php
 .github
 var
 vendor

@@ -22,7 +22,7 @@ everything this repo does not:
 - the HTTP API users publish through, which enqueues one `BuildJob` per build
 - the RabbitMQ broker and its topology (the `q.builds` queue, the `delays` exchange, the
   user and the permissions), imported from
-  `publish/docker/dev/rabbitmq-config/definitions.json` at boot
+  `publish/docker/dev/rabbitmq/definitions.json` at boot
 - the compose stack for the whole service, which builds this repo from a sibling checkout
 - the validation of every `BuildJob` field
 
@@ -94,7 +94,7 @@ treat a terminal status as final. The payload is specified in
 
 | Variable                        | Required | Default                | Description                                                                                      |
 | ------------------------------- | -------- | ---------------------- | ------------------------------------------------------------------------------------------------ |
-| `AMQP_DSN`                      | yes      | none                   | RabbitMQ connection string, e.g. `amqp://app:secret@rabbitmq:5672/%2f`                           |
+| `AMQP_DSN`                      | yes      | none                   | RabbitMQ connection string, e.g. `amqp://publish:secret@rabbitmq:5672/%2f`                       |
 | `AMQP_HEARTBEAT`                | no       | `10`                   | AMQP heartbeat in seconds; must match the broker's setting                                       |
 | `JOB_STORAGE_DIR`               | no       | `var/build_temp`       | Build scratch root. The worker creates `<build_id>/input` and `/output` under it                 |
 | `PUBLISHED_DIR`                 | no       | `var/published`        | Where finished sites are published, as `<static_site_id>/<slug>/`. An external nginx serves this |
@@ -172,7 +172,7 @@ the last attempt.
 ```bash
 composer install
 APP_ENV=dev \
-AMQP_DSN="amqp://app:secret@localhost:5672/%2f" \
+AMQP_DSN="amqp://publish:secret@localhost:5672/%2f" \
 PUBLISH_BASE_URL=http://localhost:8081 \
 MAX_DOWNLOAD_MB=256 \
 php bin/console messenger:consume builds
@@ -184,10 +184,11 @@ client refuses private addresses, so a local callback receiver needs `APP_ENV=de
 
 ## Docker
 
-This repo ships one Dockerfile, `docker/Dockerfile`, and no compose file. Its default stage
-`release` holds the source. Stage `base` leaves it out for the dev compose, which mounts the
-checkout at `/ssg-worker`. The full stack lives in `publish` and builds this repo from a
-sibling checkout:
+This repo ships two Dockerfiles and no compose file. `docker/Dockerfile` builds the image CI
+pushes: the source, no dev dependencies, `APP_ENV=prod` built in and the cache warmed.
+`docker/dev/Dockerfile` has the dev dependencies and no source; the dev compose mounts the
+checkout at `/ssg-worker`. Both share `docker/php/php.ini`. The full stack lives in `publish` and
+builds this repo from a sibling checkout:
 
 ```bash
 docker compose -f ../publish/docker/dev/compose.yaml up --build
@@ -206,10 +207,10 @@ The image is Alpine with Alpine's PHP 8.5 packages, `ext-amqp` and `pcntl` inclu
 `messenger:consume builds --time-limit=3600 --memory-limit=512M`, so it exits every hour and
 must run under a restart policy. Other limits are set with `command:` in the compose file.
 
-The worker runs as the user `ssg-worker`, uid and gid 10001; `--build-arg UID=… GID=…`
-changes them. The host gives that uid the directories mounted at `JOB_STORAGE_DIR` and
-`PUBLISHED_DIR`. The dev compose runs it with your host ids instead
-(`SSG_WORKER_UID`/`SSG_WORKER_GID`, default 1000).
+The worker runs as the user `ssg-worker`, uid and gid 10001; `--build-arg UID=… GID=…` changes
+them. The host gives that uid the directories mounted at `/ssg-worker/var/build_temp`,
+`/ssg-worker/var/published` and `/ssg-worker/var/log`. The dev compose runs it with your host
+ids instead (`SSG_WORKER_UID`/`SSG_WORKER_GID`, default 1000).
 
 PHP reads its time zone from `TZ`, default UTC.
 
@@ -222,7 +223,7 @@ with `--build --renew-anon-volumes`; without the second flag compose keeps the o
 
 ## Images
 
-CI pushes the image to `ghcr.io/nextcloud-publish/ssg-worker`, built from stage `release`:
+CI pushes the image to `ghcr.io/nextcloud-publish/ssg-worker`, built from `docker/Dockerfile`:
 
 | Tag | Points to |
 | --- | --- |
@@ -272,7 +273,10 @@ pre-commit install
 ## Layout
 
 ```text
-docker/Dockerfile               alpine + php85 packages + GNU tar; stages base (no source) and release
+docker/
+  Dockerfile                    the image CI pushes: alpine + php85 + GNU tar, the app, no dev dependencies
+  dev/Dockerfile                the same packages with the dev dependencies, no source
+  php/php.ini                   the time zone; prod and dev
 config/
   packages/messenger.yaml       builds transport and retry_strategy
   packages/property_info.yaml   constructor extractor, so BuildJob can be built

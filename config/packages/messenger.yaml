@@ -8,11 +8,11 @@ framework:
                 serializer: messenger.transport.symfony_serializer
 
                 options:
-                    # The broker imports its topology from publish/docker/dev/rabbitmq-config/definitions.json,
+                    # The broker imports its topology from publish/docker/dev/rabbitmq/definitions.json,
                     # including the `delays` exchange the retry delay queues bind to.
                     auto_setup: false
 
-                    # Must match `heartbeat` in publish/docker/dev/rabbitmq-config/rabbitmq.conf.
+                    # Must match `heartbeat` in publish/docker/dev/rabbitmq/rabbitmq.conf.
                     heartbeat: '%env(int:AMQP_HEARTBEAT)%'
 
                     queues:

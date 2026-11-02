@@ -75,7 +75,7 @@ would declare a new queue per message and attempt.
 
 The broker must declare the `delays` exchange. With `auto_setup: false`, Messenger still binds
 its delay queues to it, and a missing exchange stops the consumer on its first retry. publish
-declares it in `docker/dev/rabbitmq-config/definitions.json`.
+declares it in `docker/dev/rabbitmq/definitions.json`.
 
 ## Callback
 

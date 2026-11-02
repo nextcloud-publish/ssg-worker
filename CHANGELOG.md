@@ -20,8 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The image in GHCR has no dev dependencies, `APP_ENV=prod` built in and the cache warmed. The dev
+  image is built from `docker/dev/Dockerfile`, and CI no longer builds it.
 - `JOB_STORAGE_DIR` and `PUBLISHED_DIR` default to `var/build_temp` and `var/published` in the
   project directory instead of `/opt/ssg/build_temp` and `/opt/ssg/published`.
+- `composer.json` requires `ext-pcntl`, so `composer install` fails without it.
+- The image creates `var/build_temp` owned by the worker, so a named volume can be mounted there.
 - The image runs `messenger:consume` without `-vv`; `LOG_LEVEL` sets what is logged.
 - The worker logs through Monolog instead of `error_log()`: a fixed message per event with its
   data as context, steps at `debug`. New lines: `Build started`, `Published site` with
