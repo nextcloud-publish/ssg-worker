@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `JOB_STORAGE_DIR` and `PUBLISHED_DIR` default to `var/build_temp` and `var/published` in the
+  project directory instead of `/opt/ssg/build_temp` and `/opt/ssg/published`.
 - The image runs `messenger:consume` without `-vv`; `LOG_LEVEL` sets what is logged.
 - The worker logs through Monolog instead of `error_log()`: a fixed message per event with its
   data as context, steps at `debug`. New lines: `Build started`, `Published site` with
