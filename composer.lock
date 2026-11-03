@@ -779,12 +779,12 @@
             "source": {
                 "type": "git",
                 "url": "https://github.com/nextcloud-publish/ssg-library.git",
-                "reference": "8d3e28b2ba5ae3addd2b83c8a4434e2bad6068ce"
+                "reference": "f091efc367c1e5d66defd0c3cae93dd188ede614"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/nextcloud-publish/ssg-library/zipball/8d3e28b2ba5ae3addd2b83c8a4434e2bad6068ce",
-                "reference": "8d3e28b2ba5ae3addd2b83c8a4434e2bad6068ce",
+                "url": "https://api.github.com/repos/nextcloud-publish/ssg-library/zipball/f091efc367c1e5d66defd0c3cae93dd188ede614",
+                "reference": "f091efc367c1e5d66defd0c3cae93dd188ede614",
                 "shasum": ""
             },
             "require": {
@@ -821,7 +821,7 @@
                 "source": "https://github.com/nextcloud-publish/ssg-library/tree/main",
                 "issues": "https://github.com/nextcloud-publish/ssg-library/issues"
             },
-            "time": "2026-09-09T14:57:31+00:00"
+            "time": "2026-11-03T15:54:32+00:00"
         },
         {
             "name": "psr/cache",

@@ -96,4 +96,27 @@ final class SiteRendererTest extends TestCase
 
         self::assertGreaterThan(0, (new SiteRenderer())->render($nested, $this->outputDir, 'my_collective'));
     }
+
+    public function testForwardsTheThemeRenderOptionToSiteBuilder(): void
+    {
+        (new SiteRenderer())->render($this->pagesDir, $this->outputDir, 'my_collective', ['theme' => 'colorful']);
+
+        self::assertStringContainsString(
+            'Back for more',
+            (string) file_get_contents($this->outputDir . '/Cats/index.html'),
+        );
+    }
+
+    /** BuildJob forwards render_options unchecked, so a producer could send anything; unsupported keys must not reach SiteBuilder. */
+    public function testDropsRenderOptionsSiteBuilderDoesNotSupport(): void
+    {
+        $pages = (new SiteRenderer())->render(
+            $this->pagesDir,
+            $this->outputDir,
+            'my_collective',
+            ['theme' => 'colorful', 'unsupported' => 'whatever', 'nested' => ['a' => 1]],
+        );
+
+        self::assertGreaterThan(0, $pages);
+    }
 }

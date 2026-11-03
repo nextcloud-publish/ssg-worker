@@ -18,15 +18,37 @@ final class SiteRenderer
      * @param string $pagesDir The directory the export is unpacked in.
      * @param string $outputDir The directory to output the rendered site to.
      * @param string $siteTitle The human-readable heading, i.e. BuildJob::$title
+     * @param array<array-key, mixed> $renderOptions Arbitrary rendering options from BuildJob. BuildJob does not
+     *                                                allow-list these, so only the keys SiteBuilder actually
+     *                                                supports are picked out here; the rest are silently dropped.
      * @return int number of rendered pages
      * @throws \InvalidArgumentException if the export fails validation
      * @throws \RuntimeException if rendering fails for an environmental reason
      */
-    public function render(string $pagesDir, string $outputDir, string $siteTitle): int
+    public function render(string $pagesDir, string $outputDir, string $siteTitle, array $renderOptions = []): int
     {
         $this->validateCollectiveExport($pagesDir);
 
-        return (new SiteBuilder())->build($pagesDir, $outputDir, $siteTitle);
+        return (new SiteBuilder())->build($pagesDir, $outputDir, $siteTitle, $this->toSiteBuilderOptions($renderOptions));
+    }
+
+    /**
+     * Picks the subset of $renderOptions that SiteBuilder declares support for, in the shape it expects.
+     * BuildJob forwards render_options unchecked, so a caller can send any key/value; anything SiteBuilder
+     * doesn't recognize, or whose value doesn't match the expected type, is dropped rather than passed through.
+     *
+     * @param array<array-key, mixed> $renderOptions
+     * @return array{theme?: string}
+     */
+    private function toSiteBuilderOptions(array $renderOptions): array
+    {
+        $options = [];
+
+        if (isset($renderOptions['theme']) && is_string($renderOptions['theme'])) {
+            $options['theme'] = $renderOptions['theme'];
+        }
+
+        return $options;
     }
 
     /**
