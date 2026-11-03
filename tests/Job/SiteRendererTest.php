@@ -96,4 +96,23 @@ final class SiteRendererTest extends TestCase
 
         self::assertGreaterThan(0, (new SiteRenderer())->render($nested, $this->outputDir, 'my_collective'));
     }
+
+    public function testForwardsTheThemeRenderOptionToSiteBuilder(): void
+    {
+        (new SiteRenderer())->render($this->pagesDir, $this->outputDir, 'my_collective', ['theme' => 'colorful']);
+
+        self::assertStringContainsString(
+            'Back for more',
+            (string) file_get_contents($this->outputDir . '/Cats/index.html'),
+        );
+    }
+
+    /** The worker passes render_options on unchecked; ssg-library rejects what it does not support. */
+    public function testInvalidRenderOptionsAreRejectedBySiteBuilder(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Unknown render option: unsupported');
+
+        (new SiteRenderer())->render($this->pagesDir, $this->outputDir, 'my_collective', ['unsupported' => 'whatever']);
+    }
 }

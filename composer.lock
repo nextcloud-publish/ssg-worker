@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "dded8386335ce8decbf2dc50df2746ac",
+    "content-hash": "28b898458742f6a2f986fc4f04488046",
     "packages": [
         {
             "name": "dflydev/dot-access-data",
@@ -775,16 +775,16 @@
         },
         {
             "name": "nextcloud-publish/ssg-library",
-            "version": "dev-main",
+            "version": "0.2.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/nextcloud-publish/ssg-library.git",
-                "reference": "8d3e28b2ba5ae3addd2b83c8a4434e2bad6068ce"
+                "reference": "92b213873683c264ec191865b26651675da03aea"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/nextcloud-publish/ssg-library/zipball/8d3e28b2ba5ae3addd2b83c8a4434e2bad6068ce",
-                "reference": "8d3e28b2ba5ae3addd2b83c8a4434e2bad6068ce",
+                "url": "https://api.github.com/repos/nextcloud-publish/ssg-library/zipball/92b213873683c264ec191865b26651675da03aea",
+                "reference": "92b213873683c264ec191865b26651675da03aea",
                 "shasum": ""
             },
             "require": {
@@ -798,7 +798,6 @@
             "require-dev": {
                 "phpunit/phpunit": "^13.3"
             },
-            "default-branch": true,
             "bin": [
                 "bin/build-site.php"
             ],
@@ -818,10 +817,10 @@
             ],
             "description": "CommonMark-based static site generator for Collectives page exports",
             "support": {
-                "source": "https://github.com/nextcloud-publish/ssg-library/tree/main",
+                "source": "https://github.com/nextcloud-publish/ssg-library/tree/0.2.0",
                 "issues": "https://github.com/nextcloud-publish/ssg-library/issues"
             },
-            "time": "2026-09-09T14:57:31+00:00"
+            "time": "2026-11-11T11:12:45+00:00"
         },
         {
             "name": "psr/cache",
@@ -7122,9 +7121,7 @@
     ],
     "aliases": [],
     "minimum-stability": "stable",
-    "stability-flags": {
-        "nextcloud-publish/ssg-library": 20
-    },
+    "stability-flags": {},
     "prefer-stable": true,
     "prefer-lowest": false,
     "platform": {
@@ -7134,5 +7131,5 @@
         "ext-pcntl": "*"
     },
     "platform-dev": {},
-    "plugin-api-version": "2.9.0"
+    "plugin-api-version": "2.11.0"
 }

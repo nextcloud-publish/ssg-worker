@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Message;
 
 use App\Message\BuildJob;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
 use Symfony\Component\Messenger\Exception\MessageDecodingFailedException;
 use Symfony\Component\Messenger\Transport\Serialization\SerializerInterface;
@@ -121,9 +122,42 @@ final class BuildJobContractTest extends KernelTestCase
                 'callback_status_url',
                 'created_at',
                 'title',
+                'render_options',
             ],
             array_map(static fn (\ReflectionParameter $p): string => $p->getName(), $parameters),
         );
+    }
+
+    /**
+     * render_options is mixed so that every JSON value decodes and reaches the handler, which reports an invalid one.
+     *
+     * @return array<string, array{mixed}>
+     */
+    public static function renderOptionsValues(): array
+    {
+        return [
+            'object' => [['theme' => 'colorful', 'nested' => ['a' => 1]]],
+            'empty object' => [[]],
+            'list' => [['colorful', 'muted']],
+            'string' => ['colorful'],
+            'number' => [42],
+            'null' => [null],
+        ];
+    }
+
+    #[DataProvider('renderOptionsValues')]
+    public function testDecodesAnyRenderOptionsValueUnchanged(mixed $renderOptions): void
+    {
+        $build = $this->decode([...self::currentPayload(), 'render_options' => $renderOptions]);
+
+        self::assertSame($renderOptions, $build->render_options);
+    }
+
+    public function testRenderOptionsIsNullWhenAbsent(): void
+    {
+        $build = $this->decode(self::currentPayload());
+
+        self::assertNull($build->render_options);
     }
 
     /** ObjectNormalizer extracts getters when encoding, so a getter here would appear as an extra JSON key. */

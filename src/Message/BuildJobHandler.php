@@ -19,7 +19,7 @@ use Symfony\Component\Messenger\Exception\UnrecoverableMessageHandlingException;
  * A build that fails exits this method by throwing, not by returning an
  * error, and which exception type is thrown decides what Messenger does
  * next:
- *  - \InvalidArgumentException: e.g. an archive with no pages or a callback that rejects us.
+ *  - \InvalidArgumentException: e.g. an archive with no pages, invalid render options or a callback that rejects us.
  *    Stops retry via an UnrecoverableMessageHandlingException so the transport reports it instead of retrying the build.
  *  - \RuntimeException: the environment might differ next time (disk,
  *    network, a half-finished swap). Retry via Messenger redelivery.
@@ -95,7 +95,7 @@ final class BuildJobHandler
         $this->logger->debug('Extracted content archive', ['dir' => $buildJobUnarchivedDir]);
 
         $buildJobOutputDir = $this->jobWorkspace->buildJobOutputDir($buildJob->build_id);
-        $pageCount = $this->siteRenderer->render($buildJobUnarchivedDir, $buildJobOutputDir, $buildJob->title);
+        $pageCount = $this->siteRenderer->render($buildJobUnarchivedDir, $buildJobOutputDir, $buildJob->title, $buildJob->render_options);
         $this->logger->debug('Rendered site', ['pages' => $pageCount, 'dir' => $buildJobOutputDir]);
 
         return $pageCount;

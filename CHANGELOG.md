@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `render_options` in `BuildJob`: any JSON value, `null` when absent, passed unchecked to
+  ssg-library's `SiteBuilder::build()`. Invalid options report `failed` on the first attempt,
+  without a retry.
+
+### Changed
+
+- Requires ssg-library `^0.2` instead of `dev-main`.
+
 ## [0.3.0] - 2026-11-04
 
 ### Added

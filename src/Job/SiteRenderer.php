@@ -18,15 +18,16 @@ final class SiteRenderer
      * @param string $pagesDir The directory the export is unpacked in.
      * @param string $outputDir The directory to output the rendered site to.
      * @param string $siteTitle The human-readable heading, i.e. BuildJob::$title
+     * @param mixed $renderOptions BuildJob::$render_options, validated by SiteBuilder.
      * @return int number of rendered pages
-     * @throws \InvalidArgumentException if the export fails validation
+     * @throws \InvalidArgumentException if the export fails validation or SiteBuilder rejects $renderOptions
      * @throws \RuntimeException if rendering fails for an environmental reason
      */
-    public function render(string $pagesDir, string $outputDir, string $siteTitle): int
+    public function render(string $pagesDir, string $outputDir, string $siteTitle, mixed $renderOptions = null): int
     {
         $this->validateCollectiveExport($pagesDir);
 
-        return (new SiteBuilder())->build($pagesDir, $outputDir, $siteTitle);
+        return (new SiteBuilder())->build($pagesDir, $outputDir, $siteTitle, $renderOptions);
     }
 
     /**
