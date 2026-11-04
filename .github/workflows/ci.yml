@@ -16,7 +16,6 @@ permissions:
 
 env:
   PHP_VERSION: '8.5'
-  MAX_DOWNLOAD_MB: "256"
   JOB_STORAGE_DIR: /tmp/ssg-ci/build_temp
   PUBLISHED_DIR: /tmp/ssg-ci/published
   PUBLISH_BASE_URL: http://sites.test

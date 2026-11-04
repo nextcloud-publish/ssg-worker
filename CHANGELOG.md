@@ -32,6 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `duration_ms`, `Moved site into place` and `Cleared job directory`. `Build failed` carries the
   exception with its stack trace.
 
+### Removed
+
+- The download size limit and `MAX_DOWNLOAD_MB`. The Nextcloud side limits what it publishes.
+
 ## [0.2.0] - 2026-10-30
 
 ### Changed

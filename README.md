@@ -99,7 +99,6 @@ treat a terminal status as final. The payload is specified in
 | `JOB_STORAGE_DIR`               | no       | `var/build_temp`       | Build scratch root. The worker creates `<build_id>/input` and `/output` under it                 |
 | `PUBLISHED_DIR`                 | no       | `var/published`        | Where finished sites are published, as `<static_site_id>/<slug>/`. An external nginx serves this |
 | `PUBLISH_BASE_URL`              | yes      | none                   | The public URL `PUBLISHED_DIR` is served at. `publish_url` is `<base>/<static_site_id>/<slug>/`  |
-| `MAX_DOWNLOAD_MB`               | yes      | none                   | Ceiling on a single content download, in megabytes. Minimum `1`                                  |
 | `DOWNLOAD_TIMEOUT_SECONDS`      | no       | `30`                   | Idle timeout of the content download                                                             |
 | `DOWNLOAD_MAX_DURATION_SECONDS` | no       | `300`                  | Maximum total duration of the content download                                                   |
 | `DOWNLOAD_MAX_REDIRECTS`        | no       | `3`                    | Redirects followed for the content download                                                      |
@@ -110,10 +109,10 @@ treat a terminal status as final. The payload is specified in
 | `SENTRY_DSN`                    | no       | none                   | Sentry or GlitchTip DSN; prod only, unset sends nothing                                          |
 
 The two directory defaults are relative to the project directory, so in the image they are
-`/ssg-worker/var/build_temp` and `/ssg-worker/var/published`. `AMQP_DSN`, `PUBLISH_BASE_URL`
-and `MAX_DOWNLOAD_MB` have no fallback: an unset one stops the deployment rather than being
-guessed. A wrong `PUBLISHED_DIR` lets builds succeed and publish where nothing serves them. A
-wrong `PUBLISH_BASE_URL` reports a `publish_url` that does not resolve.
+`/ssg-worker/var/build_temp` and `/ssg-worker/var/published`. `AMQP_DSN` and `PUBLISH_BASE_URL`
+have no fallback: an unset one stops the deployment rather than being guessed. A wrong
+`PUBLISHED_DIR` lets builds succeed and publish where nothing serves them. A wrong
+`PUBLISH_BASE_URL` reports a `publish_url` that does not resolve.
 
 `PUBLISHED_DIR` must be readable by the uid that serves it. The worker runs as `ssg-worker` and
 creates `output/` at `0750`. `JobWorkspace::publish()` sets the published tree to `0755`
@@ -174,7 +173,6 @@ composer install
 APP_ENV=dev \
 AMQP_DSN="amqp://publish:secret@localhost:5672/%2f" \
 PUBLISH_BASE_URL=http://localhost:8081 \
-MAX_DOWNLOAD_MB=256 \
 php bin/console messenger:consume builds
 ```
 
@@ -243,11 +241,10 @@ the version in `CHANGELOG.md`.
 php bin/phpunit
 ```
 
-The tests use real collaborators rather than mocks, because the classes are `final` and
-PHP cannot mock them. `MockHttpClient` replaces the network and a temp directory replaces
-the volumes. Status codes, oversized bodies, broken transfers, traversal attempts,
-staging and the swap, cross-mount copies, cleanup, failure reporting and error redaction
-all run offline.
+The tests use real collaborators rather than mocks, because the classes are `final` and PHP
+cannot mock them. `MockHttpClient` replaces the network and a temp directory replaces the
+volumes. Status codes, broken transfers, traversal attempts, staging and the swap,
+cross-mount copies, cleanup, failure reporting and error redaction all run offline.
 
 Passing tests say nothing about whether `messenger:consume builds` survives its first
 retry. `InMemoryTransportFactory` discards every transport option, so nothing under
@@ -285,7 +282,7 @@ src/
   Job/
     JobWorkspace.php            every path, and a build's lifecycle:
                                 reset() before, publish() on success, clear() at the end
-    ContentDownloader.php       streams content_download_url to disk, size-capped
+    ContentDownloader.php       streams content_download_url to disk
     ArchiveExtractor.php        unpacks the archive into input/content_unarchived
     SiteRenderer.php            renders the extracted pages into output/
     StatusNotifier.php          PUTs the outcome to callback_status_url

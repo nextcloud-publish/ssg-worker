@@ -148,7 +148,7 @@ final class BuildJobHandlerTest extends TestCase
         $workspace = $this->jobWorkspace();
 
         return new BuildJobHandler(
-            new ContentDownloader($contentClient ?? $this->client, maxMegabytes: 1, maxDurationSeconds: 300, timeoutSeconds: 30, maxRedirects: 3),
+            new ContentDownloader($contentClient ?? $this->client, maxDurationSeconds: 300, timeoutSeconds: 30, maxRedirects: 3),
             new ArchiveExtractor(new Filesystem($this->logger())),
             new SiteRenderer(),
             $workspace,
