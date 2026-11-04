@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-04
+
 ### Added
 
 - Logging with Monolog to `var/log/ssg-worker.log` and stderr, in line format, from `LOG_LEVEL` up
@@ -36,6 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The download size limit and `MAX_DOWNLOAD_MB`. The Nextcloud side limits what it publishes.
 
+### Security
+
+- Symfony 8.1.11, which fixes 15 advisories in the packages the worker uses.
+
 ## [0.2.0] - 2026-10-30
 
 ### Changed
@@ -63,6 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GHCR.
 - Pre-commit hooks that run the CI lint and test steps.
 
-[Unreleased]: https://github.com/nextcloud-publish/ssg-worker/compare/0.2.0...HEAD
+[Unreleased]: https://github.com/nextcloud-publish/ssg-worker/compare/0.3.0...HEAD
+[0.3.0]: https://github.com/nextcloud-publish/ssg-worker/releases/tag/0.3.0
 [0.2.0]: https://github.com/nextcloud-publish/ssg-worker/releases/tag/0.2.0
 [0.1.0]: https://github.com/nextcloud-publish/ssg-worker/releases/tag/0.1.0
