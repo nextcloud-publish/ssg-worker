@@ -15,19 +15,12 @@ use Symfony\Component\HttpClient\Response\MockResponse;
  * Covers App\Job\ContentDownloader.
  *
  * MockHttpClient replaces the network, so every case runs offline, including the ones that
- * would otherwise need a slow, huge or broken server.
+ * would otherwise need a slow or broken server.
  */
 final class ContentDownloaderTest extends TestCase
 {
-    /** Large enough that tests not about the byte limit never reach it. */
-    private const CAP_MB = 8;
-
     /** A Collectives content download url with the structure the real one has. */
     private const CONTENT_URL = 'https://some-nextcloud.org/apps/collectives/some-collective-1234/publish/markdown_bundle';
-
-    /** The smallest cap the class accepts, and the same value in bytes. */
-    private const SMALL_CAP_MB = 1;
-    private const SMALL_CAP_BYTES = 1024 * 1024;
 
     private string $targetDir;
 
@@ -48,12 +41,11 @@ final class ContentDownloaderTest extends TestCase
      * Creates a downloader with the defaults from services.yaml.
      *
      * @param MockHttpClient $client The client to download with.
-     * @param int $maxMegabytes The download limit in megabytes.
      * @return ContentDownloader the downloader
      */
-    private function contentDownloader(MockHttpClient $client, int $maxMegabytes = self::CAP_MB): ContentDownloader
+    private function contentDownloader(MockHttpClient $client): ContentDownloader
     {
-        return new ContentDownloader($client, $maxMegabytes, maxDurationSeconds: 300, timeoutSeconds: 30, maxRedirects: 3);
+        return new ContentDownloader($client, maxDurationSeconds: 300, timeoutSeconds: 30, maxRedirects: 3);
     }
 
     /**
@@ -121,72 +113,6 @@ final class ContentDownloaderTest extends TestCase
             /** No partial file is left that a later step could take for a real archive. */
             self::assertFileDoesNotExist($this->target());
         }
-    }
-
-    public function testRefusesAnOversizedContentLengthBeforeStreaming(): void
-    {
-        $declared = self::SMALL_CAP_BYTES * 100;
-
-        $client = new MockHttpClient(new MockResponse('', [
-            'response_headers' => ['content-length' => (string) $declared],
-        ]));
-
-        try {
-            $this->contentDownloader($client, self::SMALL_CAP_MB)
-                ->download(self::CONTENT_URL, $this->targetDir);
-            self::fail('Expected a RuntimeException for an oversized Content-Length.');
-        } catch (\RuntimeException $e) {
-            self::assertStringContainsString((string) $declared, $e->getMessage());
-            self::assertFileDoesNotExist($this->target());
-        }
-    }
-
-    /** The copy reads one byte past the cap to detect an overrun, so the exact limit still has to succeed. */
-    public function testAcceptsABodyExactlyOnTheLimit(): void
-    {
-        $client = new MockHttpClient(new MockResponse(str_repeat('x', self::SMALL_CAP_BYTES)));
-
-        $path = $this->contentDownloader($client, self::SMALL_CAP_MB)
-            ->download(self::CONTENT_URL, $this->targetDir);
-
-        self::assertSame(self::SMALL_CAP_BYTES, filesize($path));
-    }
-
-    public function testAbortsOneByteOverTheLimit(): void
-    {
-        $client = new MockHttpClient(new MockResponse(str_repeat('x', self::SMALL_CAP_BYTES + 1)));
-
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('exceeded the ' . self::SMALL_CAP_BYTES . ' byte limit');
-
-        $this->contentDownloader($client, self::SMALL_CAP_MB)
-            ->download(self::CONTENT_URL, $this->targetDir);
-    }
-
-    /**
-     * No Content-Length header here.
-     * A response can omit it or declare a false value, so the overrun is only caught by counting bytes as they arrive.
-     */
-    public function testAbortsWhenTheBodyExceedsTheLimit(): void
-    {
-        $client = new MockHttpClient(new MockResponse(str_repeat('x', self::SMALL_CAP_BYTES * 2)));
-
-        try {
-            $this->contentDownloader($client, self::SMALL_CAP_MB)
-                ->download(self::CONTENT_URL, $this->targetDir);
-            self::fail('Expected a RuntimeException once the limit was passed.');
-        } catch (\RuntimeException $e) {
-            self::assertStringContainsString((string) self::SMALL_CAP_BYTES, $e->getMessage());
-            self::assertFileDoesNotExist($this->target());
-        }
-    }
-
-    public function testRejectsALimitBelowOneMegabyte(): void
-    {
-        $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('at least 1 MB');
-
-        $this->contentDownloader(new MockHttpClient(), 0);
     }
 
     public function testLeavesNoPartialFileWhenTheTransferBreaksMidStream(): void

@@ -67,8 +67,6 @@ services:
 
     App\Job\ContentDownloader:
         arguments:
-            # No default: the cap keeps one job from filling the shared build volume.
-            $maxMegabytes: '%env(int:MAX_DOWNLOAD_MB)%'
             $maxDurationSeconds: '%env(int:DOWNLOAD_MAX_DURATION_SECONDS)%'
             $timeoutSeconds: '%env(int:DOWNLOAD_TIMEOUT_SECONDS)%'
             $maxRedirects: '%env(int:DOWNLOAD_MAX_REDIRECTS)%'
