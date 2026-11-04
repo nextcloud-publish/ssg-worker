@@ -19,6 +19,9 @@ namespace App\Message;
  * @param string $callback_status_url Callback url to update the build status
  * @param string $created_at Timestamp when the job was created by the publish API.
  * @param string $title Site title, shown in the page header.
+ * @param array<array-key, mixed> $render_options Arbitrary rendering options, forwarded to SiteRenderer unchecked.
+ *                                             publish does not allow-list its keys or values, so neither does this
+ *                                             service. Defaults to [] so a message from an older publish still decodes.
  */
 final class BuildJob
 {
@@ -30,6 +33,8 @@ final class BuildJob
         public readonly string $callback_status_url,
         public readonly string $created_at,
         public readonly string $title,
+        /** @var array<array-key, mixed> */
+        public readonly array $render_options = [],
     ) {
     }
 }

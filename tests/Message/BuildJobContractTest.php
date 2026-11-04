@@ -121,9 +121,24 @@ final class BuildJobContractTest extends KernelTestCase
                 'callback_status_url',
                 'created_at',
                 'title',
+                'render_options',
             ],
             array_map(static fn (\ReflectionParameter $p): string => $p->getName(), $parameters),
         );
+    }
+
+    public function testDecodesRenderOptionsWhenPresent(): void
+    {
+        $build = $this->decode([...self::currentPayload(), 'render_options' => ['theme' => 'colorful', 'extra_css' => 'body { background: grey; }']]);
+
+        self::assertSame(['theme' => 'colorful', 'extra_css' => 'body { background: grey; }'], $build->render_options);
+    }
+
+    public function testRenderOptionsDefaultsToEmptyWhenAbsent(): void
+    {
+        $build = $this->decode(self::currentPayload());
+
+        self::assertSame([], $build->render_options);
     }
 
     /** ObjectNormalizer extracts getters when encoding, so a getter here would appear as an extra JSON key. */

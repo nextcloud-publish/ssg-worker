@@ -95,7 +95,7 @@ final class BuildJobHandler
         $this->logger->debug('Extracted content archive', ['dir' => $buildJobUnarchivedDir]);
 
         $buildJobOutputDir = $this->jobWorkspace->buildJobOutputDir($buildJob->build_id);
-        $pageCount = $this->siteRenderer->render($buildJobUnarchivedDir, $buildJobOutputDir, $buildJob->title);
+        $pageCount = $this->siteRenderer->render($buildJobUnarchivedDir, $buildJobOutputDir, $buildJob->title, $buildJob->render_options);
         $this->logger->debug('Rendered site', ['pages' => $pageCount, 'dir' => $buildJobOutputDir]);
 
         return $pageCount;
