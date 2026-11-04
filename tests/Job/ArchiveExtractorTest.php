@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace App\Tests\Job;
 
 use App\Job\ArchiveExtractor;
+use App\Job\Filesystem;
 use PHPUnit\Framework\TestCase;
+use Psr\Log\NullLogger;
 
 /**
  * Covers App\Job\ArchiveExtractor.
@@ -66,7 +68,7 @@ final class ArchiveExtractorTest extends TestCase
     {
         $archive = $this->makeArchive(['Readme.md' => '# hello']);
 
-        (new ArchiveExtractor())->extract($archive, $this->targetDir);
+        (new ArchiveExtractor(new Filesystem(new NullLogger())))->extract($archive, $this->targetDir);
 
         self::assertFileExists($this->targetDir . '/Readme.md');
         self::assertSame('# hello', file_get_contents($this->targetDir . '/Readme.md'));
@@ -80,7 +82,7 @@ final class ArchiveExtractorTest extends TestCase
             'Cats/.attachments.13283723/paw.jpg' => 'JPEGDATA',
         ]);
 
-        (new ArchiveExtractor())->extract($archive, $this->targetDir);
+        (new ArchiveExtractor(new Filesystem(new NullLogger())))->extract($archive, $this->targetDir);
 
         self::assertSame('# cats', file_get_contents($this->targetDir . '/Cats/Readme.md'));
         self::assertFileExists($this->targetDir . '/Cats/.attachments.13283723/paw.jpg');
@@ -92,7 +94,7 @@ final class ArchiveExtractorTest extends TestCase
         $name = 'Gorila_de_montaña_(Gorilla_beringei), Uganda, DD_80.jpg';
         $archive = $this->makeArchive([$name => 'JPEGDATA']);
 
-        (new ArchiveExtractor())->extract($archive, $this->targetDir);
+        (new ArchiveExtractor(new Filesystem(new NullLogger())))->extract($archive, $this->targetDir);
 
         self::assertFileExists($this->targetDir . '/' . $name);
         self::assertSame('JPEGDATA', file_get_contents($this->targetDir . '/' . $name));
@@ -104,7 +106,7 @@ final class ArchiveExtractorTest extends TestCase
         file_put_contents($notAnArchive, 'definitely not a gzipped tar');
 
         try {
-            (new ArchiveExtractor())->extract($notAnArchive, $this->targetDir);
+            (new ArchiveExtractor(new Filesystem(new NullLogger())))->extract($notAnArchive, $this->targetDir);
             self::fail('Expected a RuntimeException for a non-archive.');
         } catch (\RuntimeException $e) {
             /** Tar's own complaint, without which the message would be a bare exit code. */
@@ -117,7 +119,7 @@ final class ArchiveExtractorTest extends TestCase
     {
         $this->expectException(\RuntimeException::class);
 
-        (new ArchiveExtractor())->extract($this->tmp . '/missing.tar.gz', $this->targetDir);
+        (new ArchiveExtractor(new Filesystem(new NullLogger())))->extract($this->tmp . '/missing.tar.gz', $this->targetDir);
     }
 
     /** JobWorkspace::reset() provisions only input/ and output/, so extract() has to create content_unarchived/ itself. */
@@ -128,7 +130,7 @@ final class ArchiveExtractorTest extends TestCase
 
         self::assertDirectoryDoesNotExist($fresh);
 
-        (new ArchiveExtractor())->extract($archive, $fresh);
+        (new ArchiveExtractor(new Filesystem(new NullLogger())))->extract($archive, $fresh);
 
         self::assertFileExists($fresh . '/Readme.md');
     }
@@ -141,7 +143,7 @@ final class ArchiveExtractorTest extends TestCase
         file_put_contents($blocked, 'not a directory');
 
         try {
-            (new ArchiveExtractor())->extract($archive, $blocked . '/content_unarchived');
+            (new ArchiveExtractor(new Filesystem(new NullLogger())))->extract($archive, $blocked . '/content_unarchived');
             self::fail('Expected a RuntimeException for an uncreatable target.');
         } catch (\RuntimeException $e) {
             self::assertStringContainsString('Could not create', $e->getMessage());

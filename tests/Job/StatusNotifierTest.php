@@ -6,8 +6,11 @@ namespace App\Tests\Job;
 
 use App\Tests\DecodesJson;
 use App\Job\StatusNotifier;
+use Monolog\Handler\TestHandler;
+use Monolog\Logger;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use Psr\Log\NullLogger;
 use Symfony\Component\HttpClient\MockHttpClient;
 use Symfony\Component\HttpClient\Response\MockResponse;
 
@@ -29,22 +32,13 @@ final class StatusNotifierTest extends TestCase
     private ?array $seenRequest = null;
 
     private const URL = 'https://cloud.example.org/collectives/publish/1234-5678';
-    private const BUILD = '16ef078ad37fd894';
     private const PUBLISH_URL = 'https://sites.example.org/11f5b798-6f34-4951-ad8b-bfd623ded5c2/demo-site/';
 
-    private string $logFile;
-    private string|false $previousErrorLog;
+    private TestHandler $logged;
 
     protected function setUp(): void
     {
-        $this->logFile = sys_get_temp_dir() . '/worker-notify-log-' . bin2hex(random_bytes(6)) . '.log';
-        $this->previousErrorLog = ini_set('error_log', $this->logFile);
-    }
-
-    protected function tearDown(): void
-    {
-        ini_set('error_log', $this->previousErrorLog === false ? '' : $this->previousErrorLog);
-        @unlink($this->logFile);
+        $this->logged = new TestHandler();
     }
 
     /**
@@ -55,11 +49,11 @@ final class StatusNotifierTest extends TestCase
      */
     private function statusNotifier(MockHttpClient $client): StatusNotifier
     {
-        return new StatusNotifier($client, timeoutSeconds: 5, maxDurationSeconds: 10, maxRedirects: 0);
+        return new StatusNotifier($client, new Logger('app', [$this->logged]), timeoutSeconds: 5, maxDurationSeconds: 10, maxRedirects: 0);
     }
 
     /**
-     * Reports a published site, filling the callback url, build id and publish url from the constants above.
+     * Reports a published site, filling the callback url and publish url from the constants above.
      *
      * @param MockHttpClient $client The client to send the notification with.
      * @return void
@@ -70,7 +64,6 @@ final class StatusNotifierTest extends TestCase
     {
         $this->statusNotifier($client)->notifyPublished(
             callbackStatusUrl: self::URL,
-            buildId: self::BUILD,
             publishUrl: self::PUBLISH_URL,
         );
     }
@@ -122,7 +115,6 @@ final class StatusNotifierTest extends TestCase
     {
         $this->statusNotifier($this->recordingClient())->notifyFailed(
             callbackStatusUrl: self::URL,
-            buildId: self::BUILD,
             errorMessage: 'Extracting failed: not in gzip format',
         );
         $seen = $this->seenRequest();
@@ -135,8 +127,8 @@ final class StatusNotifierTest extends TestCase
 
     public function testPassesTheConfiguredLimitsToTheRequest(): void
     {
-        (new StatusNotifier($this->recordingClient(), timeoutSeconds: 7, maxDurationSeconds: 11, maxRedirects: 2))
-            ->notifyPublished(self::URL, self::BUILD, self::PUBLISH_URL);
+        (new StatusNotifier($this->recordingClient(), new NullLogger(), timeoutSeconds: 7, maxDurationSeconds: 11, maxRedirects: 2))
+            ->notifyPublished(self::URL, self::PUBLISH_URL);
         $seen = $this->seenRequest();
 
         self::assertEquals(7, $seen['options']['timeout'] ?? null);
@@ -159,7 +151,10 @@ final class StatusNotifierTest extends TestCase
     {
         $this->notify(new MockHttpClient(new MockResponse('', ['http_code' => $code])));
 
-        self::assertStringContainsString('reported published', (string) file_get_contents($this->logFile));
+        self::assertTrue($this->logged->hasInfo([
+            'message' => 'Reported build status',
+            'context' => ['status' => 'published', 'url' => self::URL],
+        ]));
     }
 
     /**

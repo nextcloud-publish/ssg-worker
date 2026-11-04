@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace App\Tests\Job;
 
+use App\Job\Filesystem;
 use App\Job\JobWorkspace;
 use PHPUnit\Framework\TestCase;
+use Psr\Log\NullLogger;
 
 /**
  * Covers App\Job\JobWorkspace, apart from publish(), which JobWorkspacePublishTest covers.
@@ -43,7 +45,7 @@ final class JobWorkspaceTest extends TestCase
     {
         $base = $baseDir ?? $this->baseDir;
 
-        return new JobWorkspace($base, $base . '/published', 'http://sites.test');
+        return new JobWorkspace(new Filesystem(new NullLogger()), new NullLogger(), $base, $base . '/published', 'http://sites.test');
     }
 
     /**
@@ -199,7 +201,7 @@ final class JobWorkspaceTest extends TestCase
      */
     private function paths(): JobWorkspace
     {
-        return new JobWorkspace('/opt/ssg/build_temp', '/opt/ssg/published', 'https://sites.example.org');
+        return new JobWorkspace(new Filesystem(new NullLogger()), new NullLogger(), '/opt/ssg/build_temp', '/opt/ssg/published', 'https://sites.example.org');
     }
 
     public function testTheJobTreeIsKeyedOnBuild(): void
@@ -218,7 +220,7 @@ final class JobWorkspaceTest extends TestCase
     /** The roots and the base URL are set by hand in compose, so a trailing slash is likely. */
     public function testNormalisesATrailingSlashOnTheRoots(): void
     {
-        $paths = new JobWorkspace('/opt/ssg/build_temp/', '/opt/ssg/published/', 'https://sites.example.org/');
+        $paths = new JobWorkspace(new Filesystem(new NullLogger()), new NullLogger(), '/opt/ssg/build_temp/', '/opt/ssg/published/', 'https://sites.example.org/');
 
         self::assertSame('/opt/ssg/build_temp/' . self::BUILD, $paths->buildJobDir(self::BUILD));
         self::assertSame('/opt/ssg/published/11f5b798-6f34-4951-ad8b-bfd623ded5c2', $paths->publishSiteDir(self::SITE));

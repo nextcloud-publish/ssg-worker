@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.3.0] - 2026-11-04
+
+### Added
+
+- Logging with Monolog to `var/log/ssg-worker.log` and stderr, in line format, from `LOG_LEVEL` up
+  (`info`, `debug` in dev). Every line carries the container's `hostname`. The `messenger` and
+  `http_client` channels write from `warning` up in prod.
+- Every line logged during a build carries its `build_id`, `static_site_id`, `slug` and
+  `attempt`, Messenger's and HttpClient's lines included.
+- Sentry through Monolog, in prod with `SENTRY_DSN`: `error` lines with an exception become
+  events with the build's fields, the build's earlier lines their breadcrumbs. A failed build is
+  reported once, by `Build failed`.
+
+### Changed
+
+- The image in GHCR has no dev dependencies, `APP_ENV=prod` built in and the cache warmed. The dev
+  image is built from `docker/dev/Dockerfile`, and CI no longer builds it.
+- `JOB_STORAGE_DIR` and `PUBLISHED_DIR` default to `var/build_temp` and `var/published` in the
+  project directory instead of `/opt/ssg/build_temp` and `/opt/ssg/published`.
+- `composer.json` requires `ext-pcntl`, so `composer install` fails without it.
+- The image creates `var/build_temp` owned by the worker, so a named volume can be mounted there.
+- The image runs `messenger:consume` without `-vv`; `LOG_LEVEL` sets what is logged.
+- The worker logs through Monolog instead of `error_log()`: a fixed message per event with its
+  data as context, steps at `debug`. New lines: `Build started`, `Published site` with
+  `duration_ms`, `Moved site into place` and `Cleared job directory`. `Build failed` carries the
+  exception with its stack trace.
+
+### Removed
+
+- The download size limit and `MAX_DOWNLOAD_MB`. The Nextcloud side limits what it publishes.
+
+### Security
+
+- Symfony 8.1.11, which fixes 15 advisories in the packages the worker uses.
+
 ## [0.2.0] - 2026-10-30
 
 ### Changed
@@ -32,5 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GHCR.
 - Pre-commit hooks that run the CI lint and test steps.
 
+[Unreleased]: https://github.com/nextcloud-publish/ssg-worker/compare/0.3.0...HEAD
+[0.3.0]: https://github.com/nextcloud-publish/ssg-worker/releases/tag/0.3.0
 [0.2.0]: https://github.com/nextcloud-publish/ssg-worker/releases/tag/0.2.0
 [0.1.0]: https://github.com/nextcloud-publish/ssg-worker/releases/tag/0.1.0

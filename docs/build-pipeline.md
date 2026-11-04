@@ -26,8 +26,8 @@ PUBLISHED_DIR/.staging/<build_id>/<slug>/       the build before it goes live
   [Filesystem::moveDir()](../src/Job/Filesystem.php) falls back to a recursive copy.
 - `.staging` lives inside `PUBLISHED_DIR`, so the final swap is a rename on one mount. nginx's
   `location ~ /\.` answers 404 for it.
-- A failed build's directory is deleted. The callback error and the log line are its only
-  record.
+- A failed build's directory is deleted. The callback error and the `Build failed` log line are
+  its only record.
 
 ## Publishing
 
@@ -75,7 +75,7 @@ would declare a new queue per message and attempt.
 
 The broker must declare the `delays` exchange. With `auto_setup: false`, Messenger still binds
 its delay queues to it, and a missing exchange stops the consumer on its first retry. publish
-declares it in `docker/dev/rabbitmq-config/definitions.json`.
+declares it in `docker/dev/rabbitmq/definitions.json`.
 
 ## Callback
 
