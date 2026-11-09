@@ -52,7 +52,7 @@ services:
             $buildTempDir: '%env(JOB_STORAGE_DIR)%'
             $publishedDir: '%env(PUBLISHED_DIR)%'
 
-    # The PUT runs while the message is unacked, so keep these well below consumer_timeout.
+    # The PATCH runs while the message is unacked, so keep these well below consumer_timeout.
     App\Job\StatusNotifier:
         arguments:
             $httpClient: '@app.http_client.no_private_network'

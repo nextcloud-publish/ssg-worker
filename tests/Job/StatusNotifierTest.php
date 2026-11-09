@@ -95,12 +95,12 @@ final class StatusNotifierTest extends TestCase
     }
 
     /** The published contract, specified in docs/build-pipeline.md; assertSame so no extra key can slip in. */
-    public function testPostsStatusAndPublishUrlWhenPublished(): void
+    public function testPatchesStatusAndPublishUrlWhenPublished(): void
     {
         $this->notify($this->recordingClient());
         $seen = $this->seenRequest();
 
-        self::assertSame('PUT', $seen['method']);
+        self::assertSame('PATCH', $seen['method']);
         self::assertSame(self::URL, $seen['url']);
         $headers = $seen['options']['headers'] ?? null;
         self::assertIsArray($headers);

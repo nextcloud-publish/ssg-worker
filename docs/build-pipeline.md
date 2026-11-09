@@ -79,14 +79,14 @@ declares it in `docker/dev/rabbitmq/definitions.json`.
 
 ## Callback
 
-A `PUT` to `callback_status_url` with one of two bodies:
+A `PATCH` to `callback_status_url` with one of two bodies:
 
 ```json
 { "status": "published", "data": { "publish_url": "https://sites.example.org/<static_site_id>/<slug>/" } }
 { "status": "failed",    "data": { "error_message": "Could not download ..." } }
 ```
 
-- Delivery is at-least-once: a crash between the PUT and the ack sends it again. Receivers
+- Delivery is at-least-once: a crash between the PATCH and the ack sends it again. Receivers
   identify the build by `callback_status_url`, dedupe on `(callback_status_url, status)`, and
   treat a final status as final.
 - A failed callback fails the build. 408, 429, 5xx and transport errors are retried, so the
