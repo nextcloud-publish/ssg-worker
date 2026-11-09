@@ -20,7 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- The status callback uses `PATCH` instead of `PUT`.
+- The status callback uses `PATCH` instead of `PUT` and sends `OCS-APIRequest: true`, which
+  Nextcloud's CSRF check requires for an OCS call without a login.
 
 ## [0.3.0] - 2026-11-04
 

@@ -86,6 +86,8 @@ A `PATCH` to `callback_status_url` with one of two bodies:
 { "status": "failed",    "data": { "error_message": "Could not download ..." } }
 ```
 
+- The PATCH carries `OCS-APIRequest: true`; without it Nextcloud's CSRF check rejects the
+  anonymous OCS call with 412.
 - Delivery is at-least-once: a crash between the PATCH and the ack sends it again. Receivers
   identify the build by `callback_status_url`, dedupe on `(callback_status_url, status)`, and
   treat a final status as final.

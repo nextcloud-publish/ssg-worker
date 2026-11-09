@@ -105,6 +105,7 @@ final class StatusNotifierTest extends TestCase
         $headers = $seen['options']['headers'] ?? null;
         self::assertIsArray($headers);
         self::assertContains('Content-Type: application/json', $headers);
+        self::assertContains('OCS-APIRequest: true', $headers);
         self::assertSame([
             'status' => 'published',
             'data' => ['publish_url' => self::PUBLISH_URL],

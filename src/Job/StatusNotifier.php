@@ -85,6 +85,7 @@ final class StatusNotifier
         try {
             $response = $this->httpClient->request('PATCH', $callbackStatusUrl, [
                 'json' => $payload,
+                'headers' => ['OCS-APIRequest' => 'true'],
                 'timeout' => $this->timeoutSeconds,
                 'max_duration' => $this->maxDurationSeconds,
                 'max_redirects' => $this->maxRedirects,
