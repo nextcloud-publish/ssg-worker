@@ -237,8 +237,23 @@ CI pushes the image to `ghcr.io/nextcloud-publish/ssg-worker`, built from `docke
 | `<branch>` | the newest build of a pull request from that branch; `/` becomes `-` |
 | `sha-<commit>` | the build of one commit |
 
-A release is a git tag like `1.2.3`, without a leading `v`, pushed to `main`. It must match
-the version in `CHANGELOG.md`.
+## Releases
+
+A release is a git tag like `1.2.3`, without a leading `v`, on `main`:
+
+1. Turn `## [Unreleased]` in `CHANGELOG.md` into a version section, add its link at the
+   bottom, commit and push to `main`.
+2. Tag the commit and push the tag:
+
+   ```bash
+   git tag -a 1.2.3 -m 1.2.3
+   git push origin 1.2.3
+   ```
+
+CI builds the image, then creates the GitHub release from the version's CHANGELOG section,
+with the `docker pull` command after its first paragraph. A paragraph before the first `###`
+heading becomes the summary at the top of the release, and a second one, e.g. what to change
+before updating, follows the pull command.
 
 ## Tests
 

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A pushed version tag creates the GitHub release after the image, with the version's CHANGELOG
+  section and the `docker pull` command as notes.
+
 ## [0.4.0] - 2026-11-11
 
 ### Added
