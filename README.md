@@ -265,8 +265,15 @@ environment, so warm that cache first:
 php bin/console cache:warmup --env=dev && vendor/bin/phpstan analyse
 ```
 
-[pre-commit](https://pre-commit.com/) runs the CI lint steps, PHPStan and the tests before each commit.
-It needs PHP 8.5 and `composer install` on the host. Install the hook once:
+PHP-CS-Fixer checks `src/` and `tests/` against PSR-12; `fix` reformats them:
+
+```bash
+vendor/bin/php-cs-fixer check --diff
+vendor/bin/php-cs-fixer fix
+```
+
+[pre-commit](https://pre-commit.com/) runs the CI lint steps, the style check, PHPStan and the tests
+before each commit. It needs PHP 8.5 and `composer install` on the host. Install the hook once:
 
 ```bash
 pre-commit install

@@ -36,7 +36,10 @@ final class Filesystem
         @mkdir($dir, $mode, true);
         if (!is_dir($dir)) {
             throw new \RuntimeException(sprintf(
-                'Could not create %s: %s', $dir, error_get_last()['message'] ?? 'unknown error'));
+                'Could not create %s: %s',
+                $dir,
+                error_get_last()['message'] ?? 'unknown error'
+            ));
         }
 
         // mkdir() applies the process umask to $mode, so an explicit chmod is
@@ -58,7 +61,11 @@ final class Filesystem
             return;
         }
         throw new \RuntimeException(sprintf(
-            'Could not move %s to %s: %s', $from, $to, error_get_last()['message'] ?? 'unknown error'));
+            'Could not move %s to %s: %s',
+            $from,
+            $to,
+            error_get_last()['message'] ?? 'unknown error'
+        ));
     }
 
     /**
@@ -128,7 +135,11 @@ final class Filesystem
 
                 if (!$copied) {
                     throw new \RuntimeException(sprintf(
-                        'Could not copy %s to %s: %s', $entry->getPathname(), $target, error_get_last()['message'] ?? 'unknown error'));
+                        'Could not copy %s to %s: %s',
+                        $entry->getPathname(),
+                        $target,
+                        error_get_last()['message'] ?? 'unknown error'
+                    ));
                 }
 
                 // copy() ignores the source mode, so carry it over by hand.
@@ -199,14 +210,22 @@ final class Filesystem
 
         if (!$modeSet) {
             throw new \RuntimeException(sprintf(
-                'Could not set mode %04o on %s: %s', $mode, $path, error_get_last()['message'] ?? 'unknown error'));
+                'Could not set mode %04o on %s: %s',
+                $mode,
+                $path,
+                error_get_last()['message'] ?? 'unknown error'
+            ));
         }
 
         if ($owner !== null) {
             $ownerSet = @chown($path, $owner);
             if (!$ownerSet) {
                 throw new \RuntimeException(sprintf(
-                    'Could not set owner %s on %s: %s', $owner, $path, error_get_last()['message'] ?? 'unknown error'));
+                    'Could not set owner %s on %s: %s',
+                    $owner,
+                    $path,
+                    error_get_last()['message'] ?? 'unknown error'
+                ));
             }
         }
 
@@ -214,7 +233,11 @@ final class Filesystem
             $groupSet = @chgrp($path, $group);
             if (!$groupSet) {
                 throw new \RuntimeException(sprintf(
-                    'Could not set group %s on %s: %s', $group, $path, error_get_last()['message'] ?? 'unknown error'));
+                    'Could not set group %s on %s: %s',
+                    $group,
+                    $path,
+                    error_get_last()['message'] ?? 'unknown error'
+                ));
             }
         }
     }

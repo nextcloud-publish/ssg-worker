@@ -51,6 +51,13 @@ repos:
         files: ^(config/|src/|composer\.lock$)
         pass_filenames: false
 
+      - id: php-cs-fixer
+        name: PHP-CS-Fixer
+        entry: vendor/bin/php-cs-fixer check --diff
+        language: system
+        files: ^(src/|tests/).*\.php$|^\.php-cs-fixer\.dist\.php$
+        pass_filenames: false
+
       - id: phpstan
         name: PHPStan
         entry: sh -c 'php bin/console cache:warmup --env=dev -q && vendor/bin/phpstan analyse --no-progress'

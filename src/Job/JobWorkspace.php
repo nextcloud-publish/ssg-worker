@@ -111,7 +111,9 @@ final class JobWorkspace
 
         if (!$this->clear($buildId)) {
             throw new \RuntimeException(sprintf(
-                'Could not clear the previous attempt at %s', $buildJobDir));
+                'Could not clear the previous attempt at %s',
+                $buildJobDir
+            ));
         }
 
         $this->filesystem->ensureDir($this->buildJobInputDir($buildId), self::BUILD_JOB_DIR_MODE);
@@ -140,12 +142,17 @@ final class JobWorkspace
 
         if (!is_dir($buildJobOutputDir)) {
             throw new \RuntimeException(sprintf(
-                'Nothing to publish for build %s of site %s: no build output at %s.',$buildId, $staticSiteId, $buildJobOutputDir));
+                'Nothing to publish for build %s of site %s: no build output at %s.',
+                $buildId,
+                $staticSiteId,
+                $buildJobOutputDir
+            ));
         }
 
         if ($this->filesystem->isEmptyDir($buildJobOutputDir)) {
             throw new \InvalidArgumentException(
-                sprintf('Refusing to publish build %s: it rendered no pages.', $buildId));
+                sprintf('Refusing to publish build %s: it rendered no pages.', $buildId)
+            );
         }
 
         $this->filesystem->removeDir($publishStagingDir);

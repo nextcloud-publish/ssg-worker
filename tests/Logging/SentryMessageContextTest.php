@@ -29,7 +29,7 @@ final class SentryMessageContextTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->transport = new class implements TransportInterface {
+        $this->transport = new class () implements TransportInterface {
             /** @var list<Event> */
             public array $sent = [];
 

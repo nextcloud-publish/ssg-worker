@@ -30,6 +30,7 @@
         }
     ],
     "require-dev": {
+        "friendsofphp/php-cs-fixer": "^3.95",
         "phpstan/phpstan": "^2.3",
         "phpstan/phpstan-phpunit": "^2.1",
         "phpstan/phpstan-symfony": "^2.1",
