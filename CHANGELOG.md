@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-11
+
 ### Added
 
 - `render_options` in `BuildJob`: any JSON value, `null` when absent, passed unchecked to
@@ -85,7 +87,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GHCR.
 - Pre-commit hooks that run the CI lint and test steps.
 
-[Unreleased]: https://github.com/nextcloud-publish/ssg-worker/compare/0.3.0...HEAD
+[Unreleased]: https://github.com/nextcloud-publish/ssg-worker/compare/0.4.0...HEAD
+[0.4.0]: https://github.com/nextcloud-publish/ssg-worker/releases/tag/0.4.0
 [0.3.0]: https://github.com/nextcloud-publish/ssg-worker/releases/tag/0.3.0
 [0.2.0]: https://github.com/nextcloud-publish/ssg-worker/releases/tag/0.2.0
 [0.1.0]: https://github.com/nextcloud-publish/ssg-worker/releases/tag/0.1.0
