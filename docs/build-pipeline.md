@@ -55,7 +55,7 @@ count is the build budget.
 | Thrown | Means | Result |
 | --- | --- | --- |
 | `\RuntimeException` | may succeed next time: disk, network, broker | retried |
-| `\InvalidArgumentException` | cannot succeed: archive with no pages, nothing rendered, callback rejected | the handler wraps it in `UnrecoverableMessageHandlingException`, reported on the first attempt |
+| `\InvalidArgumentException` | cannot succeed: archive with no pages, nothing rendered, invalid render options, callback rejected | the handler wraps it in `UnrecoverableMessageHandlingException`, reported on the first attempt |
 
 Classes in `src/Job` throw only these two SPL exceptions. Messenger's exception is used only in
 `BuildJobHandler`. A permanent error thrown as `\RuntimeException` uses up both attempts and

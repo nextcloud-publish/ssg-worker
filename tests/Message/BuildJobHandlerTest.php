@@ -208,6 +208,7 @@ final class BuildJobHandlerTest extends TestCase
      * @param string $buildId The build id to put on the job.
      * @param string $title The site title to put on the job.
      * @param string $callbackStatusUrl The callback url to put on the job.
+     * @param mixed $renderOptions The render options to put on the job.
      * @return BuildJob the message under test
      */
     private function job(
@@ -217,6 +218,7 @@ final class BuildJobHandlerTest extends TestCase
         string $buildId = self::BUILD_ID,
         string $title = self::TITLE,
         string $callbackStatusUrl = self::CALLBACK_URL,
+        mixed $renderOptions = null,
     ): BuildJob {
         return new BuildJob(
             build_id: $buildId,
@@ -226,6 +228,7 @@ final class BuildJobHandlerTest extends TestCase
             callback_status_url: $callbackStatusUrl,
             created_at: '2026-09-03T13:00:09+00:00',
             title: $title,
+            render_options: $renderOptions,
         );
     }
 
@@ -287,6 +290,13 @@ final class BuildJobHandlerTest extends TestCase
         $index = $this->publishedSite('demo-site') . '/index.html';
         self::assertFileExists($index);
         self::assertStringContainsString('My Team Handbook', (string) file_get_contents($index));
+    }
+
+    public function testBuildSucceedsWhenRenderOptionsArePresent(): void
+    {
+        ($this->buildJobHandler())($this->job(renderOptions: ['theme' => 'colorful']));
+
+        self::assertFileExists($this->publishedSite() . '/index.html');
     }
 
     public function testReportsPublishedWithThePublishUrl(): void
@@ -411,6 +421,18 @@ final class BuildJobHandlerTest extends TestCase
         } catch (UnrecoverableMessageHandlingException $e) {
             /** The original reason has to survive the wrapping, or the callback is useless. */
             self::assertStringContainsString('no .md file found', $e->getMessage());
+            self::assertInstanceOf(\InvalidArgumentException::class, $e->getPrevious());
+        }
+    }
+
+    /** The same options fail the same way on every attempt, so they are terminal rather than worth a retry. */
+    public function testInvalidRenderOptionsAreTerminal(): void
+    {
+        try {
+            ($this->buildJobHandler())($this->job(renderOptions: 'colorful'));
+            self::fail('Expected invalid render options to be refused.');
+        } catch (UnrecoverableMessageHandlingException $e) {
+            self::assertStringContainsString('render_options must be a JSON object', $e->getMessage());
             self::assertInstanceOf(\InvalidArgumentException::class, $e->getPrevious());
         }
     }
