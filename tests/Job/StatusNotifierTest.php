@@ -95,16 +95,17 @@ final class StatusNotifierTest extends TestCase
     }
 
     /** The published contract, specified in docs/build-pipeline.md; assertSame so no extra key can slip in. */
-    public function testPostsStatusAndPublishUrlWhenPublished(): void
+    public function testPatchesStatusAndPublishUrlWhenPublished(): void
     {
         $this->notify($this->recordingClient());
         $seen = $this->seenRequest();
 
-        self::assertSame('PUT', $seen['method']);
+        self::assertSame('PATCH', $seen['method']);
         self::assertSame(self::URL, $seen['url']);
         $headers = $seen['options']['headers'] ?? null;
         self::assertIsArray($headers);
         self::assertContains('Content-Type: application/json', $headers);
+        self::assertContains('OCS-APIRequest: true', $headers);
         self::assertSame([
             'status' => 'published',
             'data' => ['publish_url' => self::PUBLISH_URL],

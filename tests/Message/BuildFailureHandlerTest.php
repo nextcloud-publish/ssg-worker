@@ -174,7 +174,7 @@ final class BuildFailureHandlerTest extends TestCase
 
     // --- only terminal failures are an outcome ----------------------------
 
-    /** Another attempt is coming, so nothing has been decided. Reporting here would PUT a failure for a build that may still succeed. */
+    /** Another attempt is coming, so nothing has been decided. Reporting here would PATCH a failure for a build that may still succeed. */
     public function testSaysNothingWhenAnotherAttemptIsComing(): void
     {
         $buildJobDir = $this->givenAJobTree();

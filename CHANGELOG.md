@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Requires ssg-library `^0.2` instead of `dev-main`.
 - Code is formatted to PSR-12, and CI and pre-commit check it with PHP-CS-Fixer.
 
+### Fixed
+
+- The status callback uses `PATCH` instead of `PUT` and sends `OCS-APIRequest: true`, which
+  Nextcloud's CSRF check requires for an OCS call without a login.
+
 ## [0.3.0] - 2026-11-04
 
 ### Added

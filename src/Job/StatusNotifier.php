@@ -9,7 +9,7 @@ use Symfony\Contracts\HttpClient\Exception\ExceptionInterface as HttpClientExcep
 use Symfony\Contracts\HttpClient\HttpClientInterface;
 
 /**
- * PUTs a build's final result to the callback_status_url from the build request.
+ * PATCHes a build's final result to the callback_status_url from the build request.
  * The body is {"status": "published", "data": {"publish_url": ...}} or {"status": "failed", "data": {"error_message": ...}}.
  * Throws \InvalidArgumentException when no retry could succeed and \RuntimeException when one might.
  *
@@ -47,7 +47,7 @@ final class StatusNotifier
      */
     public function notifyPublished(string $callbackStatusUrl, string $publishUrl): void
     {
-        $this->put($callbackStatusUrl, self::STATUS_PUBLISHED, ['publish_url' => $publishUrl]);
+        $this->patch($callbackStatusUrl, self::STATUS_PUBLISHED, ['publish_url' => $publishUrl]);
     }
 
     /**
@@ -62,11 +62,11 @@ final class StatusNotifier
      */
     public function notifyFailed(string $callbackStatusUrl, string $errorMessage): void
     {
-        $this->put($callbackStatusUrl, self::STATUS_FAILED, ['error_message' => $errorMessage]);
+        $this->patch($callbackStatusUrl, self::STATUS_FAILED, ['error_message' => $errorMessage]);
     }
 
     /**
-     * PUTs {"status": $status, "data": $data} to $callbackStatusUrl.
+     * PATCHes {"status": $status, "data": $data} to $callbackStatusUrl.
      *
      * @param string $callbackStatusUrl The url to send the notification to.
      * @param string $status The status of the build.
@@ -75,7 +75,7 @@ final class StatusNotifier
      * @throws \InvalidArgumentException if no retry could succeed
      * @throws \RuntimeException         if the call is worth retrying
      */
-    private function put(string $callbackStatusUrl, string $status, array $data): void
+    private function patch(string $callbackStatusUrl, string $status, array $data): void
     {
         $payload = [
             'status' => $status,
@@ -83,8 +83,9 @@ final class StatusNotifier
         ];
 
         try {
-            $response = $this->httpClient->request('PUT', $callbackStatusUrl, [
+            $response = $this->httpClient->request('PATCH', $callbackStatusUrl, [
                 'json' => $payload,
+                'headers' => ['OCS-APIRequest' => 'true'],
                 'timeout' => $this->timeoutSeconds,
                 'max_duration' => $this->maxDurationSeconds,
                 'max_redirects' => $this->maxRedirects,

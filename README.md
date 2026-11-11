@@ -8,7 +8,7 @@ Rendering is done by [ssg-library](https://github.com/nextcloud-publish/ssg-libr
 There is no HTTP server, no database and no templating in this repo.
 
 For each job the worker downloads the content archive, extracts it, renders the pages,
-publishes the result to `PUBLISHED_DIR/<static_site_id>/<slug>/` and PUTs the outcome to the job's
+publishes the result to `PUBLISHED_DIR/<static_site_id>/<slug>/` and PATCHes the outcome to the job's
 `callback_status_url`. Progress and failures are logged, see [Logging](#logging).
 
 [docs/build-pipeline.md](docs/build-pipeline.md) describes the directories, publishing,
@@ -107,9 +107,9 @@ treat a terminal status as final. The payload is specified in
 | `DOWNLOAD_TIMEOUT_SECONDS`      | no       | `30`                   | Idle timeout of the content download                                                             |
 | `DOWNLOAD_MAX_DURATION_SECONDS` | no       | `300`                  | Maximum total duration of the content download                                                   |
 | `DOWNLOAD_MAX_REDIRECTS`        | no       | `3`                    | Redirects followed for the content download                                                      |
-| `CALLBACK_TIMEOUT_SECONDS`      | no       | `5`                    | Idle timeout of the status callback PUT                                                          |
-| `CALLBACK_MAX_DURATION_SECONDS` | no       | `10`                   | Maximum total duration of the status callback PUT; keep it well below `consumer_timeout`         |
-| `CALLBACK_MAX_REDIRECTS`        | no       | `0`                    | Redirects followed for the status callback PUT                                                   |
+| `CALLBACK_TIMEOUT_SECONDS`      | no       | `5`                    | Idle timeout of the status callback PATCH                                                        |
+| `CALLBACK_MAX_DURATION_SECONDS` | no       | `10`                   | Maximum total duration of the status callback PATCH; keep it well below `consumer_timeout`       |
+| `CALLBACK_MAX_REDIRECTS`        | no       | `0`                    | Redirects followed for the status callback PATCH                                                 |
 | `LOG_LEVEL`                     | no       | `info`, `debug` in dev | Lowest level logged: `debug`, `info`, `notice`, `warning`, `error`                               |
 | `SENTRY_DSN`                    | no       | none                   | Sentry or GlitchTip DSN; prod only, unset sends nothing                                          |
 
@@ -297,7 +297,7 @@ src/
     ContentDownloader.php       streams content_download_url to disk
     ArchiveExtractor.php        unpacks the archive into input/content_unarchived
     SiteRenderer.php            renders the extracted pages into output/
-    StatusNotifier.php          PUTs the outcome to callback_status_url
+    StatusNotifier.php          PATCHes the outcome to callback_status_url
     Filesystem.php              filesystem helpers; every error carries the OS message
   Message/
     BuildJob.php                the message shape for q.builds, mirroring publish's message class

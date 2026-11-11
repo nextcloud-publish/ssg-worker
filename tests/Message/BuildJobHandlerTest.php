@@ -375,7 +375,7 @@ final class BuildJobHandlerTest extends TestCase
 
     /**
      * A retryable failure is rethrown untouched so the transport redelivers it.
-     * Reporting here would PUT a failure for a build that may still succeed, so BuildFailureHandler does it instead.
+     * Reporting here would PATCH a failure for a build that may still succeed, so BuildFailureHandler does it instead.
      */
     public function testARetryableFailureIsRethrownAndReportsNothing(): void
     {
@@ -456,7 +456,7 @@ final class BuildJobHandlerTest extends TestCase
             self::assertStringContainsString('503', $e->getMessage());
         }
 
-        /** The site went live regardless, because publishing happens before the PUT. */
+        /** The site went live regardless, because publishing happens before the PATCH. */
         self::assertFileExists($this->publishedSite() . '/index.html');
     }
 
