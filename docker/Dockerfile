@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-# ssg-worker consuming q.builds.
+# publish-worker consuming q.builds.
 # Build context is the repo root: docker build -f docker/Dockerfile .
 FROM alpine:latest
 
@@ -13,13 +13,13 @@ RUN apk add --no-cache \
         tar tzdata
 
 ENV TZ=UTC
-COPY docker/php/php.ini /etc/php85/conf.d/99-ssg-worker.ini
+COPY docker/php/php.ini /etc/php85/conf.d/99-publish-worker.ini
 
 ARG UID=10001
 ARG GID=10001
-RUN addgroup -S -g "$GID" ssg-worker && adduser -S -u "$UID" -G ssg-worker ssg-worker
+RUN addgroup -S -g "$GID" publish-worker && adduser -S -u "$UID" -G publish-worker publish-worker
 
-WORKDIR /ssg-worker
+WORKDIR /publish-worker
 
 COPY --from=composer/composer:2-bin /composer /usr/bin/composer
 COPY composer.json composer.lock symfony.lock ./
@@ -31,10 +31,10 @@ RUN composer dump-autoload --no-dev --classmap-authoritative \
     && composer dump-env prod
 
 # var/ holds the Symfony cache, var/log/, var/build_temp/ and var/published/, the only directory the worker writes.
-# var/build_temp exists so a new named volume mounted there belongs to ssg-worker.
-RUN mkdir -p var/build_temp && chown -R ssg-worker:ssg-worker var
+# var/build_temp exists so a new named volume mounted there belongs to publish-worker.
+RUN mkdir -p var/build_temp && chown -R publish-worker:publish-worker var
 
-USER ssg-worker
+USER publish-worker
 
 RUN php bin/console cache:warmup
 

@@ -1,6 +1,6 @@
 # The build pipeline
 
-How `ssg-worker` turns a `BuildJob` into a published site.
+How `publish-worker` turns a `BuildJob` into a published site.
 
 ```text
 q.builds ─► reset ─► download ─► extract ─► render ─► publish ─► callback

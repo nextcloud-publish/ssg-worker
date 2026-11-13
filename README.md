@@ -1,11 +1,11 @@
-# ssg-worker
+# publish-worker
 
-SSG stands for **static site generator**. This worker is the generator half of the
-Nextcloud publish service: it turns Nextcloud Collectives markdown pages into a static
-HTML site and writes it where a web server can serve it.
+The worker of the Nextcloud publish service. It takes the build jobs publish queues, turns the
+Nextcloud Collectives markdown pages into a static HTML site and writes it where a web server can
+serve it.
 
-Rendering is done by [ssg-library](https://github.com/nextcloud-publish/ssg-library).
-There is no HTTP server, no database and no templating in this repo.
+Rendering is done by [ssg-library](https://github.com/nextcloud-publish/ssg-library), the static
+site generator. There is no HTTP server, no database and no templating in this repo.
 
 For each job the worker downloads the content archive, extracts it, renders the pages,
 publishes the result to `PUBLISHED_DIR/<static_site_id>/<slug>/` and PATCHes the outcome to the job's
@@ -114,19 +114,19 @@ treat a terminal status as final. The payload is specified in
 | `SENTRY_DSN`                    | no       | none                   | Sentry or GlitchTip DSN; prod only, unset sends nothing                                          |
 
 The two directory defaults are relative to the project directory, so in the image they are
-`/ssg-worker/var/build_temp` and `/ssg-worker/var/published`. `AMQP_DSN` and `PUBLISH_BASE_URL`
+`/publish-worker/var/build_temp` and `/publish-worker/var/published`. `AMQP_DSN` and `PUBLISH_BASE_URL`
 have no fallback: an unset one stops the deployment rather than being guessed. A wrong
 `PUBLISHED_DIR` lets builds succeed and publish where nothing serves them. A wrong
 `PUBLISH_BASE_URL` reports a `publish_url` that does not resolve.
 
-`PUBLISHED_DIR` must be readable by the uid that serves it. The worker runs as `ssg-worker` and
+`PUBLISHED_DIR` must be readable by the uid that serves it. The worker runs as `publish-worker` and
 creates `output/` at `0750`. `JobWorkspace::publish()` sets the published tree to `0755`
 for directories and `0644` for files. No unit test can verify this.
 
 ## Logging
 
 [Monolog](https://symfony.com/doc/current/logging.html) writes every line to
-`var/log/ssg-worker.log` and to stderr, from `LOG_LEVEL` up. The file is not rotated; mount
+`var/log/publish-worker.log` and to stderr, from `LOG_LEVEL` up. The file is not rotated; mount
 `var/log/` from the host and rotate it there. The replicas share the file.
 
 ```text
@@ -190,7 +190,7 @@ client refuses private addresses, so a local callback receiver needs `APP_ENV=de
 This repo ships two Dockerfiles and no compose file. `docker/Dockerfile` builds the image CI
 pushes: the source, no dev dependencies, `APP_ENV=prod` built in and the cache warmed.
 `docker/dev/Dockerfile` has the dev dependencies and no source; the dev compose mounts the
-checkout at `/ssg-worker`. Both share `docker/php/php.ini`. The full stack lives in `publish` and
+checkout at `/publish-worker`. Both share `docker/php/php.ini`. The full stack lives in `publish` and
 builds this repo from a sibling checkout:
 
 ```bash
@@ -200,7 +200,7 @@ docker compose -f ../publish/docker/dev/compose.yaml up --build
 To build the image on its own:
 
 ```bash
-docker build --pull -f docker/Dockerfile -t ssg-worker .
+docker build --pull -f docker/Dockerfile -t publish-worker .
 ```
 
 The build context is the repo root, so `.dockerignore` stays there. `--pull` fetches the
@@ -210,9 +210,9 @@ The image is Alpine with Alpine's PHP 8.5 packages, `ext-amqp` and `pcntl` inclu
 `messenger:consume builds --time-limit=3600 --memory-limit=512M`, so it exits every hour and
 must run under a restart policy. Other limits are set with `command:` in the compose file.
 
-The worker runs as the user `ssg-worker`, uid and gid 10001; `--build-arg UID=… GID=…` changes
-them. The host gives that uid the directories mounted at `/ssg-worker/var/build_temp`,
-`/ssg-worker/var/published` and `/ssg-worker/var/log`. The dev compose runs it with your host
+The worker runs as the user `publish-worker`, uid and gid 10001; `--build-arg UID=… GID=…` changes
+them. The host gives that uid the directories mounted at `/publish-worker/var/build_temp`,
+`/publish-worker/var/published` and `/publish-worker/var/log`. The dev compose runs it with your host
 ids instead (`SSG_WORKER_UID`/`SSG_WORKER_GID`, default 1000).
 
 PHP reads its time zone from `TZ`, default UTC.
@@ -221,12 +221,12 @@ PHP reads its time zone from `TZ`, default UTC.
 kills the worker mid-build, the message is redelivered, and a build attempt is spent.
 
 `vendor/` is installed at image build time. Compose keeps it behind an anonymous volume
-so the `/ssg-worker` bind mount does not shadow it. After changing `composer.json`, rebuild
+so the `/publish-worker` bind mount does not shadow it. After changing `composer.json`, rebuild
 with `--build --renew-anon-volumes`; without the second flag compose keeps the old `vendor/`.
 
 ## Images
 
-CI pushes the image to `ghcr.io/nextcloud-publish/ssg-worker`, built from `docker/Dockerfile`:
+CI pushes the image to `ghcr.io/nextcloud-publish/publish-worker`, built from `docker/Dockerfile`:
 
 | Tag | Points to |
 | --- | --- |
