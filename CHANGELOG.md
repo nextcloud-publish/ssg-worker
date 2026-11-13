@@ -7,10 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+ssg-worker is now publish-worker: the repository, the image
+`ghcr.io/nextcloud-publish/publish-worker`, the directory in the image and the log file.
+
+Update together with the publish release that uses the new image: its compose file mounts
+`/publish-worker/var/...`, and the log file is `publish-worker.log`, so logrotate rules on the host
+need the new name.
+
 ### Added
 
 - A pushed version tag creates the GitHub release after the image, with the version's CHANGELOG
   section and the `docker pull` command as notes.
+
+### Changed
+
+- The project, the image and the user in the image are `publish-worker`, the working directory
+  `/publish-worker` and the log file `var/log/publish-worker.log`.
 
 ## [0.4.0] - 2026-11-11
 
@@ -92,8 +104,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GHCR.
 - Pre-commit hooks that run the CI lint and test steps.
 
-[Unreleased]: https://github.com/nextcloud-publish/ssg-worker/compare/0.4.0...HEAD
-[0.4.0]: https://github.com/nextcloud-publish/ssg-worker/releases/tag/0.4.0
-[0.3.0]: https://github.com/nextcloud-publish/ssg-worker/releases/tag/0.3.0
-[0.2.0]: https://github.com/nextcloud-publish/ssg-worker/releases/tag/0.2.0
-[0.1.0]: https://github.com/nextcloud-publish/ssg-worker/releases/tag/0.1.0
+[Unreleased]: https://github.com/nextcloud-publish/publish-worker/compare/0.4.0...HEAD
+[0.4.0]: https://github.com/nextcloud-publish/publish-worker/releases/tag/0.4.0
+[0.3.0]: https://github.com/nextcloud-publish/publish-worker/releases/tag/0.3.0
+[0.2.0]: https://github.com/nextcloud-publish/publish-worker/releases/tag/0.2.0
+[0.1.0]: https://github.com/nextcloud-publish/publish-worker/releases/tag/0.1.0

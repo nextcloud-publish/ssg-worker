@@ -25,7 +25,7 @@ final class JobWorkspaceTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->baseDir = sys_get_temp_dir() . '/ssg-worker-workspace-test-' . bin2hex(random_bytes(6));
+        $this->baseDir = sys_get_temp_dir() . '/publish-worker-workspace-test-' . bin2hex(random_bytes(6));
     }
 
     protected function tearDown(): void
@@ -151,7 +151,7 @@ final class JobWorkspaceTest extends TestCase
     public function testThrowsWhenTheBaseDirectoryCannotBeCreated(): void
     {
         /** A regular file where the base directory should be. */
-        $blocked = sys_get_temp_dir() . '/ssg-worker-blocked-' . bin2hex(random_bytes(6));
+        $blocked = sys_get_temp_dir() . '/publish-worker-blocked-' . bin2hex(random_bytes(6));
         file_put_contents($blocked, 'not a directory');
 
         try {
@@ -174,7 +174,7 @@ final class JobWorkspaceTest extends TestCase
     {
         @file_get_contents('/definitely/not/here');
 
-        $blocked = sys_get_temp_dir() . '/ssg-worker-blocked-' . bin2hex(random_bytes(6));
+        $blocked = sys_get_temp_dir() . '/publish-worker-blocked-' . bin2hex(random_bytes(6));
         file_put_contents($blocked, 'not a directory');
 
         try {

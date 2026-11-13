@@ -73,7 +73,7 @@ services:
 
 when@dev:
     services:
-        # The dev callback endpoint (collectives-mock) has a private Docker address.
+        # The dev callback endpoint (collectives-api-mock) has a private Docker address.
         app.http_client.no_private_network:
             alias: http_client
 

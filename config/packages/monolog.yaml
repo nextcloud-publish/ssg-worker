@@ -14,7 +14,7 @@ when@dev:
         handlers:
             file:
                 type: stream
-                path: '%kernel.logs_dir%/ssg-worker.log'
+                path: '%kernel.logs_dir%/publish-worker.log'
                 level: '%env(LOG_LEVEL)%'
                 use_locking: true
                 include_stacktraces: true
@@ -28,7 +28,7 @@ when@dev:
             # One line per deprecation; their stack traces are vendor code.
             deprecation_file:
                 type: stream
-                path: '%kernel.logs_dir%/ssg-worker.log'
+                path: '%kernel.logs_dir%/publish-worker.log'
                 level: '%env(LOG_LEVEL)%'
                 use_locking: true
                 channels: [deprecation]
@@ -67,7 +67,7 @@ when@prod:
             # The replicas share this file; use_locking keeps their lines whole.
             file:
                 type: stream
-                path: '%kernel.logs_dir%/ssg-worker.log'
+                path: '%kernel.logs_dir%/publish-worker.log'
                 use_locking: true
                 include_stacktraces: true
             stderr:
