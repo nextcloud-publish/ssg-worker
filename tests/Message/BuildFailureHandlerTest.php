@@ -67,11 +67,11 @@ final class BuildFailureHandlerTest extends TestCase
     /**
      * The build scratch root for this test.
      *
-     * @return string the JOB_STORAGE_DIR equivalent
+     * @return string the BUILDS_DIR equivalent
      */
-    private function buildTemp(): string
+    private function buildsDir(): string
     {
-        return $this->root . '/build_temp';
+        return $this->root . '/builds';
     }
 
     /**
@@ -91,7 +91,7 @@ final class BuildFailureHandlerTest extends TestCase
      */
     private function jobWorkspace(): JobWorkspace
     {
-        return new JobWorkspace(new Filesystem($this->logger()), $this->logger(), $this->buildTemp(), $this->root . '/published', 'http://sites.test');
+        return new JobWorkspace(new Filesystem($this->logger()), $this->logger(), $this->buildsDir(), $this->root . '/pages', 'http://sites.test');
     }
 
     /**
@@ -106,8 +106,8 @@ final class BuildFailureHandlerTest extends TestCase
             $this->jobWorkspace(),
             new StatusNotifier($callbackClient ?? $this->callbackClient, $this->logger(), timeoutSeconds: 5, maxDurationSeconds: 10, maxRedirects: 0),
             $this->logger(),
-            $this->buildTemp(),
-            $this->root . '/published',
+            $this->buildsDir(),
+            $this->root . '/pages',
         );
     }
 
@@ -260,13 +260,13 @@ final class BuildFailureHandlerTest extends TestCase
 
     public function testTheReportedReasonCarriesNoFilesystemPaths(): void
     {
-        $raw = 'Extracting ' . $this->buildTemp() . '/11f5b798-6f34-4951-ad8b-bfd623ded5c2/abc/input/content.tar.gz failed (exit 2): '
+        $raw = 'Extracting ' . $this->buildsDir() . '/11f5b798-6f34-4951-ad8b-bfd623ded5c2/abc/input/content.tar.gz failed (exit 2): '
             . 'tar: unexpected EOF in archive';
 
         $error = $this->reportedErrorFor($raw);
 
         /** The layout is gone. */
-        self::assertStringNotContainsString($this->buildTemp(), $error);
+        self::assertStringNotContainsString($this->buildsDir(), $error);
 
         /** Which tree, which stage and tar's own reason all survive. */
         self::assertStringContainsString('<build>', $error);
@@ -277,15 +277,15 @@ final class BuildFailureHandlerTest extends TestCase
         self::assertTrue($this->logged->hasErrorThatPasses(
             fn (LogRecord $record): bool => $record->message === 'Build failed'
                 && $record->context['exception'] instanceof \Throwable
-                && str_contains($record->context['exception']->getMessage(), $this->buildTemp()),
+                && str_contains($record->context['exception']->getMessage(), $this->buildsDir()),
         ));
     }
 
     public function testTheReportedReasonNamesThePublishedRootToo(): void
     {
         $error = $this->reportedErrorFor(
-            'Could not move ' . $this->buildTemp() . '/a/b/output to '
-            . $this->root . '/published/.staging/b: No space left on device',
+            'Could not move ' . $this->buildsDir() . '/a/b/output to '
+            . $this->root . '/pages/.staging/b: No space left on device',
         );
 
         self::assertStringContainsString('<build>', $error);
@@ -367,11 +367,11 @@ final class BuildFailureHandlerTest extends TestCase
             $this->jobWorkspace(),
             new StatusNotifier($this->callbackClient, $this->logger(), timeoutSeconds: 5, maxDurationSeconds: 10, maxRedirects: 0),
             $this->logger(),
-            '/opt/ssg',
-            '/opt/ssg/published',
+            '/srv',
+            '/srv/pages',
         );
 
-        $handler->onMessageFailed($this->failedEvent(new \RuntimeException('at /opt/ssg/published/demo')));
+        $handler->onMessageFailed($this->failedEvent(new \RuntimeException('at /srv/pages/demo')));
 
         self::assertStringContainsString('<published>', $this->firstReportedError());
     }
@@ -388,7 +388,7 @@ final class BuildFailureHandlerTest extends TestCase
         self::assertDirectoryDoesNotExist($buildJobDir);
 
         /** The site's parent goes too once it holds no other build. */
-        self::assertDirectoryDoesNotExist($this->buildTemp() . '/' . self::SITE_ID);
+        self::assertDirectoryDoesNotExist($this->buildsDir() . '/' . self::SITE_ID);
     }
 
     // --- nothing here may escape ------------------------------------------

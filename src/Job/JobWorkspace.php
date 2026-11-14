@@ -10,14 +10,14 @@ use Psr\Log\LoggerInterface;
  * Holds the folder layout of a build job and of the published site, and resets, publishes and clears them.
  * The ids are used as directory names unchecked: publish validates them before a job is enqueued.
  *
- *   {buildTempDir}/                    JOB_STORAGE_DIR, root of all builds
+ *   {buildsDir}/                       BUILDS_DIR, root of all builds
  *     {buildId}/                       buildJobDir() -- one build
  *       input/                         buildJobInputDir(), 0750
  *         content.tar.gz               the download
  *         content_unarchived/          buildJobUnarchivedDir(), the archive is unpacked here and the renderer reads it
  *       output/                        buildJobOutputDir(), 0750, the renderer writes this
  *
- *   {publishedDir}/                    PUBLISHED_DIR, the bind mount nginx serves
+ *   {pagesDir}/                        PAGES_DIR, the bind mount nginx serves
  *     .staging/                        dotted so nginx 404s it
  *       {buildId}/                     publishStagingDir(), the build before it goes live; dirs 0755, files 0644 from here down
  *         {slug}/                      the rendered pages
@@ -26,8 +26,8 @@ use Psr\Log\LoggerInterface;
  *
  * @param Filesystem $filesystem The filesystem operations to run the layout with.
  * @param LoggerInterface $logger The app logger.
- * @param string $buildTempDir The directory to store the build temporary files.
- * @param string $publishedDir The directory to store the published files.
+ * @param string $buildsDir The directory to store the build temporary files.
+ * @param string $pagesDir The directory to store the published files.
  * @param string $publishBaseUrl The public URL the published directory is served at.
  */
 final class JobWorkspace
@@ -44,18 +44,18 @@ final class JobWorkspace
     public function __construct(
         private readonly Filesystem $filesystem,
         private readonly LoggerInterface $logger,
-        private readonly string $buildTempDir,
-        private readonly string $publishedDir,
+        private readonly string $buildsDir,
+        private readonly string $pagesDir,
         private readonly string $publishBaseUrl,
     ) {
     }
 
     // --- paths ------------------------------------------------------------
 
-    /** {buildTempDir}/{buildId} -- one build's whole workspace. */
+    /** {buildsDir}/{buildId} -- one build's whole workspace. */
     public function buildJobDir(string $buildId): string
     {
-        return rtrim($this->buildTempDir, '/') . '/' . $buildId;
+        return rtrim($this->buildsDir, '/') . '/' . $buildId;
     }
 
     /** Location where the archive is downloaded and extracted. */
@@ -76,16 +76,16 @@ final class JobWorkspace
         return $this->buildJobDir($buildId) . '/' . self::OUTPUT_DIR;
     }
 
-    /** {publishedDir}/{staticSiteId} -- holds the site's one published slug directory. */
+    /** {pagesDir}/{staticSiteId} -- holds the site's one published slug directory. */
     public function publishSiteDir(string $staticSiteId): string
     {
-        return rtrim($this->publishedDir, '/') . '/' . $staticSiteId;
+        return rtrim($this->pagesDir, '/') . '/' . $staticSiteId;
     }
 
     /** Intermediate directory where build html site is copied to before being published. */
     public function publishStagingDir(string $buildId): string
     {
-        return rtrim($this->publishedDir, '/') . '/' . self::STAGING_DIR . '/' . $buildId;
+        return rtrim($this->pagesDir, '/') . '/' . self::STAGING_DIR . '/' . $buildId;
     }
 
     /** {publishBaseUrl}/{staticSiteId}/{slug}/ -- the public URL of a published site. */
@@ -97,7 +97,7 @@ final class JobWorkspace
     // --- lifecycle --------------------------------------------------------
 
     /**
-     * Creates {buildTempDir}/{buildId}/input and /output.
+     * Creates {buildsDir}/{buildId}/input and /output.
      * Clears the directories if they already exist from a previous build attempt.
      *
      * @param string $buildId The build id to reset.
@@ -123,7 +123,7 @@ final class JobWorkspace
     }
 
     /**
-     * Moves the rendered html pages to the published directory at {publishedDir}/{staticSiteId}/{slug}.
+     * Moves the rendered html pages to the published directory at {pagesDir}/{staticSiteId}/{slug}.
      * The pages are staged as {slug}/ inside a staging directory, which then replaces the whole site directory.
      * Any slug directory published earlier for the same site is removed with it.
      *

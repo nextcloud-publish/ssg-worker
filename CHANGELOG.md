@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+The storage roots are `BUILDS_DIR` and `PAGES_DIR`, with the defaults `var/builds` and `var/pages`.
+
+Update together with the publish release that mounts `/publish-worker/var/builds` and
+`/publish-worker/var/pages`. A deployment that sets `JOB_STORAGE_DIR` or `PUBLISHED_DIR` renames them.
+
+### Changed
+
+- `JOB_STORAGE_DIR` is `BUILDS_DIR`, default `var/builds` instead of `var/build_temp`.
+- `PUBLISHED_DIR` is `PAGES_DIR`, default `var/pages` instead of `var/published`.
+
 ## [0.5.0] - 2026-11-14
 
 ssg-worker is now publish-worker: the repository, the image

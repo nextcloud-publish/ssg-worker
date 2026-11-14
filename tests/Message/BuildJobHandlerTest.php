@@ -114,27 +114,27 @@ final class BuildJobHandlerTest extends TestCase
      */
     private function jobWorkspace(): JobWorkspace
     {
-        return new JobWorkspace(new Filesystem($this->logger()), $this->logger(), $this->buildTemp(), $this->publishedRoot(), 'http://sites.test');
+        return new JobWorkspace(new Filesystem($this->logger()), $this->logger(), $this->buildsDir(), $this->publishedRoot(), 'http://sites.test');
     }
 
     /**
      * The build scratch root for this test.
      *
-     * @return string the JOB_STORAGE_DIR equivalent
+     * @return string the BUILDS_DIR equivalent
      */
-    private function buildTemp(): string
+    private function buildsDir(): string
     {
-        return $this->root . '/build_temp';
+        return $this->root . '/builds';
     }
 
     /**
      * The published root for this test.
      *
-     * @return string the PUBLISHED_DIR equivalent
+     * @return string the PAGES_DIR equivalent
      */
     private function publishedRoot(): string
     {
-        return $this->root . '/published';
+        return $this->root . '/pages';
     }
 
     /**
@@ -185,7 +185,7 @@ final class BuildJobHandlerTest extends TestCase
      */
     private function buildJobDir(string $buildId = self::BUILD_ID): string
     {
-        return $this->buildTemp() . '/' . $buildId;
+        return $this->buildsDir() . '/' . $buildId;
     }
 
     /**
@@ -276,7 +276,7 @@ final class BuildJobHandlerTest extends TestCase
         ($this->buildJobHandler())($this->job());
 
         self::assertDirectoryDoesNotExist($this->buildJobDir());
-        self::assertSame([], array_values(array_diff(scandir($this->buildTemp()), ['.', '..'])));
+        self::assertSame([], array_values(array_diff(scandir($this->buildsDir()), ['.', '..'])));
     }
 
     /**

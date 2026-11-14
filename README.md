@@ -8,7 +8,7 @@ Rendering is done by [ssg-library](https://github.com/nextcloud-publish/ssg-libr
 site generator. There is no HTTP server, no database and no templating in this repo.
 
 For each job the worker downloads the content archive, extracts it, renders the pages,
-publishes the result to `PUBLISHED_DIR/<static_site_id>/<slug>/` and PATCHes the outcome to the job's
+publishes the result to `PAGES_DIR/<static_site_id>/<slug>/` and PATCHes the outcome to the job's
 `callback_status_url`. Progress and failures are logged, see [Logging](#logging).
 
 [docs/build-pipeline.md](docs/build-pipeline.md) describes the directories, publishing,
@@ -47,9 +47,9 @@ serializer and never reaches the handler. The fields the handler reads:
 
 | Field                  | Used for                                                                  |
 | ---------------------- | ------------------------------------------------------------------------- |
-| `build_id`             | UUID v7; names the job's folder under `JOB_STORAGE_DIR`                    |
-| `static_site_id`       | names the site's folder under `PUBLISHED_DIR`                              |
-| `slug`                 | names the published site under `PUBLISHED_DIR/<static_site_id>`            |
+| `build_id`             | UUID v7; names the job's folder under `BUILDS_DIR`                    |
+| `static_site_id`       | names the site's folder under `PAGES_DIR`                              |
+| `slug`                 | names the published site under `PAGES_DIR/<static_site_id>`            |
 | `title`                | the heading on every rendered page                                         |
 | `content_download_url` | the archive to fetch                                                       |
 | `callback_status_url`  | where the outcome is PUT; private network addresses are refused, except in dev |
@@ -73,7 +73,7 @@ directory, so reusing one would republish pages that were deleted from the colle
 
 | Outcome           | What happens                                                                                                                                                                      |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Success           | `PUBLISHED_DIR/<static_site_id>/` is replaced by one holding only `<slug>/`, the build tree is cleared, and `published` is PUT with    the `publish_url`                          |
+| Success           | `PAGES_DIR/<static_site_id>/` is replaced by one holding only `<slug>/`, the build tree is cleared, and `published` is PUT with    the `publish_url`                          |
 | Transient failure | rethrown, and the transport redelivers after 15s. `max_retries: 1` gives two build attempts; on the second failure `BuildFailureHandler` deletes the build tree and PUTs `failed`  |
 | Permanent failure | reported `failed` on the first delivery, never retried. Caused by an archive with no Markdown page, invalid `render_options`, or a callback answered with a 3xx or a 4xx other than 408 and 429 |
 
@@ -101,9 +101,9 @@ treat a terminal status as final. The payload is specified in
 | ------------------------------- | -------- | ---------------------- | ------------------------------------------------------------------------------------------------ |
 | `AMQP_DSN`                      | yes      | none                   | RabbitMQ connection string, e.g. `amqp://publish:secret@rabbitmq:5672/%2f`                       |
 | `AMQP_HEARTBEAT`                | no       | `10`                   | AMQP heartbeat in seconds; must match the broker's setting                                       |
-| `JOB_STORAGE_DIR`               | no       | `var/build_temp`       | Build scratch root. The worker creates `<build_id>/input` and `/output` under it                 |
-| `PUBLISHED_DIR`                 | no       | `var/published`        | Where finished sites are published, as `<static_site_id>/<slug>/`. An external nginx serves this |
-| `PUBLISH_BASE_URL`              | yes      | none                   | The public URL `PUBLISHED_DIR` is served at. `publish_url` is `<base>/<static_site_id>/<slug>/`  |
+| `BUILDS_DIR`                    | no       | `var/builds`           | Build scratch root. The worker creates `<build_id>/input` and `/output` under it                 |
+| `PAGES_DIR`                     | no       | `var/pages`            | Where finished sites are published, as `<static_site_id>/<slug>/`. An external nginx serves this |
+| `PUBLISH_BASE_URL`              | yes      | none                   | The public URL `PAGES_DIR` is served at. `publish_url` is `<base>/<static_site_id>/<slug>/`      |
 | `DOWNLOAD_TIMEOUT_SECONDS`      | no       | `30`                   | Idle timeout of the content download                                                             |
 | `DOWNLOAD_MAX_DURATION_SECONDS` | no       | `300`                  | Maximum total duration of the content download                                                   |
 | `DOWNLOAD_MAX_REDIRECTS`        | no       | `3`                    | Redirects followed for the content download                                                      |
@@ -114,12 +114,12 @@ treat a terminal status as final. The payload is specified in
 | `SENTRY_DSN`                    | no       | none                   | Sentry or GlitchTip DSN; prod only, unset sends nothing                                          |
 
 The two directory defaults are relative to the project directory, so in the image they are
-`/publish-worker/var/build_temp` and `/publish-worker/var/published`. `AMQP_DSN` and `PUBLISH_BASE_URL`
+`/publish-worker/var/builds` and `/publish-worker/var/pages`. `AMQP_DSN` and `PUBLISH_BASE_URL`
 have no fallback: an unset one stops the deployment rather than being guessed. A wrong
-`PUBLISHED_DIR` lets builds succeed and publish where nothing serves them. A wrong
+`PAGES_DIR` lets builds succeed and publish where nothing serves them. A wrong
 `PUBLISH_BASE_URL` reports a `publish_url` that does not resolve.
 
-`PUBLISHED_DIR` must be readable by the uid that serves it. The worker runs as `publish-worker` and
+`PAGES_DIR` must be readable by the uid that serves it. The worker runs as `publish-worker` and
 creates `output/` at `0750`. `JobWorkspace::publish()` sets the published tree to `0755`
 for directories and `0644` for files. No unit test can verify this.
 
@@ -211,9 +211,9 @@ The image is Alpine with Alpine's PHP 8.5 packages, `ext-amqp` and `pcntl` inclu
 must run under a restart policy. Other limits are set with `command:` in the compose file.
 
 The worker runs as the user `publish-worker`, uid and gid 10001; `--build-arg UID=… GID=…` changes
-them. The host gives that uid the directories mounted at `/publish-worker/var/build_temp`,
-`/publish-worker/var/published` and `/publish-worker/var/log`. The dev compose runs it with your host
-ids instead (`SSG_WORKER_UID`/`SSG_WORKER_GID`, default 1000).
+them. The host gives that uid the directories mounted at `/publish-worker/var/builds`,
+`/publish-worker/var/pages` and `/publish-worker/var/log`. The dev compose runs it with your host
+ids instead (`PUBLISH_WORKER_UID`/`PUBLISH_WORKER_GID`, default 1000).
 
 PHP reads its time zone from `TZ`, default UTC.
 

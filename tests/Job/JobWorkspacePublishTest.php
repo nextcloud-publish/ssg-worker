@@ -37,8 +37,8 @@ final class JobWorkspacePublishTest extends TestCase
         $this->workspace = new JobWorkspace(
             new Filesystem(new NullLogger()),
             new NullLogger(),
-            $this->root . '/build_temp',
-            $this->root . '/published',
+            $this->root . '/builds',
+            $this->root . '/pages',
             'http://sites.test',
         );
     }
@@ -269,8 +269,8 @@ final class JobWorkspacePublishTest extends TestCase
 
         $this->workspace->publish(self::BUILD, self::SITE, self::SLUG);
 
-        self::assertFileExists($this->root . '/published/' . self::SITE . '/' . self::SLUG . '/index.html');
-        self::assertSame([self::SLUG], array_values(array_diff(scandir($this->root . '/published/' . self::SITE), ['.', '..'])));
+        self::assertFileExists($this->root . '/pages/' . self::SITE . '/' . self::SLUG . '/index.html');
+        self::assertSame([self::SLUG], array_values(array_diff(scandir($this->root . '/pages/' . self::SITE), ['.', '..'])));
     }
 
     /** A site whose slug changed must stop being served under the old one. */
@@ -330,7 +330,7 @@ final class JobWorkspacePublishTest extends TestCase
         $this->workspace = new JobWorkspace(
             new Filesystem(new NullLogger()),
             new NullLogger(),
-            $this->root . '/build_temp',
+            $this->root . '/builds',
             $this->publishedOnOtherMount,
             'http://sites.test',
         );

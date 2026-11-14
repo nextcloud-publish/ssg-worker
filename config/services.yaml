@@ -5,8 +5,8 @@
 # See also https://symfony.com/doc/current/service_container/import.html
 parameters:
     # Defaults for the storage roots, in var/ like the cache and the logs.
-    env(JOB_STORAGE_DIR): '%kernel.project_dir%/var/build_temp'
-    env(PUBLISHED_DIR): '%kernel.project_dir%/var/published'
+    env(BUILDS_DIR): '%kernel.project_dir%/var/builds'
+    env(PAGES_DIR): '%kernel.project_dir%/var/pages'
     # Defaults for the status callback options, used when the env var is not set.
     env(CALLBACK_TIMEOUT_SECONDS): '5'
     env(CALLBACK_MAX_DURATION_SECONDS): '10'
@@ -42,15 +42,15 @@ services:
     # PUBLISH_BASE_URL has no default: it is the public URL of the deployment.
     App\Job\JobWorkspace:
         arguments:
-            $buildTempDir: '%env(JOB_STORAGE_DIR)%'
-            $publishedDir: '%env(PUBLISHED_DIR)%'
+            $buildsDir: '%env(BUILDS_DIR)%'
+            $pagesDir: '%env(PAGES_DIR)%'
             $publishBaseUrl: '%env(PUBLISH_BASE_URL)%'
 
     # Needs the two roots to redact them from failure messages.
     App\Message\BuildFailureHandler:
         arguments:
-            $buildTempDir: '%env(JOB_STORAGE_DIR)%'
-            $publishedDir: '%env(PUBLISHED_DIR)%'
+            $buildsDir: '%env(BUILDS_DIR)%'
+            $pagesDir: '%env(PAGES_DIR)%'
 
     # The PATCH runs while the message is unacked, so keep these well below consumer_timeout.
     App\Job\StatusNotifier:

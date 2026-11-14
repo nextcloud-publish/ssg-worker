@@ -19,8 +19,8 @@ use Symfony\Component\Messenger\Event\WorkerMessageFailedEvent;
  * @param JobWorkspace $jobWorkspace The job workspace helper class.
  * @param StatusNotifier $statusNotifier The notifier to use to notify the status callback.
  * @param LoggerInterface $logger The app logger.
- * @param string $buildTempDir The build temp directory.
- * @param string $publishedDir The published directory.
+ * @param string $buildsDir The build temp directory.
+ * @param string $pagesDir The published directory.
  */
 final class BuildFailureHandler implements EventSubscriberInterface
 {
@@ -37,12 +37,12 @@ final class BuildFailureHandler implements EventSubscriberInterface
         private readonly JobWorkspace $jobWorkspace,
         private readonly StatusNotifier $statusNotifier,
         private readonly LoggerInterface $logger,
-        string $buildTempDir,
-        string $publishedDir,
+        string $buildsDir,
+        string $pagesDir,
     ) {
         $roots = [
-            rtrim($buildTempDir, '/') => '<build>',
-            rtrim($publishedDir, '/') => '<published>',
+            rtrim($buildsDir, '/') => '<build>',
+            rtrim($pagesDir, '/') => '<published>',
         ];
 
         // Longest first, so a root nested inside another is replaced by its own

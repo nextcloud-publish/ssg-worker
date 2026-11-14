@@ -13,9 +13,9 @@ result queue.
 ## Directories
 
 ```text
-JOB_STORAGE_DIR/<build_id>/{input,output}       build scratch, 0750
-PUBLISHED_DIR/<static_site_id>/<slug>/          the live site, served at PUBLISH_BASE_URL
-PUBLISHED_DIR/.staging/<build_id>/<slug>/       the build before it goes live
+BUILDS_DIR/<build_id>/{input,output}      build scratch, 0750
+PAGES_DIR/<static_site_id>/<slug>/       the live site, served at PUBLISH_BASE_URL
+PAGES_DIR/.staging/<build_id>/<slug>/    the build before it goes live
 ```
 
 [JobWorkspace](../src/Job/JobWorkspace.php) builds every path.
@@ -24,7 +24,7 @@ PUBLISHED_DIR/.staging/<build_id>/<slug>/       the build before it goes live
   The renderer does not clear `output/`, so a shared one would republish deleted pages.
 - The two roots may be on different mounts. `rename()` fails across mounts with `EXDEV`, so
   [Filesystem::moveDir()](../src/Job/Filesystem.php) falls back to a recursive copy.
-- `.staging` lives inside `PUBLISHED_DIR`, so the final swap is a rename on one mount. nginx's
+- `.staging` lives inside `PAGES_DIR`, so the final swap is a rename on one mount. nginx's
   `location ~ /\.` answers 404 for it.
 - A failed build's directory is deleted. The callback error and the `Build failed` log line are
   its only record.
@@ -38,7 +38,7 @@ The handler calls `reset()` at the start of every attempt, `publish()` on succes
    touch the live site.
 2. Sets the staged tree to `0755` for directories and `0644` for files, so nginx can read it.
    `output/` is `0750`, and files from the archive keep their tarball modes.
-3. Deletes `PUBLISHED_DIR/<static_site_id>/` and renames the staged directory in its place.
+3. Deletes `PAGES_DIR/<static_site_id>/` and renames the staged directory in its place.
    `rename()` onto a non-empty directory fails with `ENOTEMPTY`.
 
 Replacing the whole site directory means an old slug stops being served. `publish()` refuses
