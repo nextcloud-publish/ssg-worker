@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-14
+
 ssg-worker is now publish-worker: the repository, the image
 `ghcr.io/nextcloud-publish/publish-worker`, the directory in the image and the log file.
 
@@ -104,7 +106,8 @@ need the new name.
   GHCR.
 - Pre-commit hooks that run the CI lint and test steps.
 
-[Unreleased]: https://github.com/nextcloud-publish/publish-worker/compare/0.4.0...HEAD
+[Unreleased]: https://github.com/nextcloud-publish/publish-worker/compare/0.5.0...HEAD
+[0.5.0]: https://github.com/nextcloud-publish/publish-worker/releases/tag/0.5.0
 [0.4.0]: https://github.com/nextcloud-publish/publish-worker/releases/tag/0.4.0
 [0.3.0]: https://github.com/nextcloud-publish/publish-worker/releases/tag/0.3.0
 [0.2.0]: https://github.com/nextcloud-publish/publish-worker/releases/tag/0.2.0
